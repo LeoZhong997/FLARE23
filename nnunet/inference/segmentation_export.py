@@ -22,9 +22,6 @@ import SimpleITK as sitk
 from batchgenerators.augmentations.utils import resize_segmentation
 from nnunet.preprocessing.preprocessing import get_lowres_axis, get_do_separate_z, resample_data_or_seg
 from batchgenerators.utilities.file_and_folder_operations import *
-import time
-import torch
-import torch.nn.functional as F
 
 
 def save_segmentation_nifti_from_softmax(segmentation_softmax: Union[str, np.ndarray], out_fname: str,
@@ -116,7 +113,21 @@ def save_segmentation_nifti_from_softmax(segmentation_softmax: Union[str, np.nda
         seg_old_spacing = segmentation_softmax
 
     if resampled_npz_fname is not None:
-        np.savez_compressed(resampled_npz_fname, softmax=seg_old_spacing.astype(np.float16))
+        # if we reduced the size of the images during preprocessing by cropping to the nonzero area then we need to
+        # revert this cropping also for the softmax output...
+        bbox = deepcopy(properties_dict.get('crop_bbox'))
+        if bbox is not None:
+            softmax_orig_shape = np.zeros((seg_old_spacing.shape[0], *shape_original_before_cropping),
+                                          dtype=shape_original_before_cropping.dtype)
+            for c in range(3):
+                bbox[c][1] = np.min((bbox[c][0] + seg_old_spacing.shape[c+1], shape_original_before_cropping[c]))
+            softmax_orig_shape[:, bbox[0][0]:bbox[0][1],
+            bbox[1][0]:bbox[1][1],
+            bbox[2][0]:bbox[2][1]] = seg_old_spacing
+        else:
+            softmax_orig_shape = seg_old_spacing
+
+        np.savez_compressed(resampled_npz_fname, softmax=softmax_orig_shape.astype(np.float16))
         # this is needed for ensembling if the nonlinearity is sigmoid
         if region_class_order is not None:
             properties_dict['regions_class_order'] = region_class_order
@@ -130,8 +141,7 @@ def save_segmentation_nifti_from_softmax(segmentation_softmax: Union[str, np.nda
             seg_old_spacing_final[seg_old_spacing[i] > 0.5] = c
         seg_old_spacing = seg_old_spacing_final
 
-    bbox = properties_dict.get('crop_bbox')
-
+    bbox = deepcopy(properties_dict.get('crop_bbox'))
     if bbox is not None:
         seg_old_size = np.zeros(shape_original_before_cropping, dtype=np.uint8)
         for c in range(3):
@@ -190,67 +200,52 @@ def save_segmentation_nifti(segmentation, out_fname, dct, order=1, force_separat
     shape_original_before_cropping = dct.get('original_size_of_raw_data')
     # current_spacing = dct.get('spacing_after_resampling')
     # original_spacing = dct.get('original_spacing')
-    
+
     if np.any(np.array(current_shape) != np.array(shape_original_after_cropping)):
-        # 自己写
-        tpe = segmentation.dtype
-        data_torch = torch.from_numpy(segmentation).to(torch.float32)
-        # 重复两次，扩展两个维度
-        data_torch = torch.unsqueeze(data_torch, 0)
-        data_torch = torch.unsqueeze(data_torch, 0)
-        new_size = shape_original_after_cropping
-        reshaped_final_data = F.interpolate(data_torch, size=new_size, mode='nearest-exact', antialias=False)
-        # 同样压缩两次
-        reshaped_final_data = torch.squeeze(reshaped_final_data, 0)
-        reshaped_final_data = torch.squeeze(reshaped_final_data, 0)
-        reshaped_final_data = reshaped_final_data.numpy().astype(np.uint8)
-        seg_old_spacing = reshaped_final_data
+        if order == 0:
+            seg_old_spacing = resize_segmentation(segmentation, shape_original_after_cropping, 0)
+        else:
+            if force_separate_z is None:
+                if get_do_separate_z(dct.get('original_spacing')):
+                    do_separate_z = True
+                    lowres_axis = get_lowres_axis(dct.get('original_spacing'))
+                elif get_do_separate_z(dct.get('spacing_after_resampling')):
+                    do_separate_z = True
+                    lowres_axis = get_lowres_axis(dct.get('spacing_after_resampling'))
+                else:
+                    do_separate_z = False
+                    lowres_axis = None
+            else:
+                do_separate_z = force_separate_z
+                if do_separate_z:
+                    lowres_axis = get_lowres_axis(dct.get('original_spacing'))
+                else:
+                    lowres_axis = None
 
-        # if order == 0:
-        #     seg_old_spacing = resize_segmentation(segmentation, shape_original_after_cropping, 0)
-        # else:
-        #     if force_separate_z is None:
-        #         if get_do_separate_z(dct.get('original_spacing')):
-        #             do_separate_z = True
-        #             lowres_axis = get_lowres_axis(dct.get('original_spacing'))
-        #         elif get_do_separate_z(dct.get('spacing_after_resampling')):
-        #             do_separate_z = True
-        #             lowres_axis = get_lowres_axis(dct.get('spacing_after_resampling'))
-        #         else:
-        #             do_separate_z = False
-        #             lowres_axis = None
-        #     else:
-        #         do_separate_z = force_separate_z
-        #         if do_separate_z:
-        #             lowres_axis = get_lowres_axis(dct.get('original_spacing'))
-        #         else:
-        #             lowres_axis = None
-
-        #     print("separate z:", do_separate_z, "lowres axis", lowres_axis)
-        #     seg_old_spacing = resample_data_or_seg(segmentation[None], shape_original_after_cropping, is_seg=True,
-        #                                            axis=lowres_axis, order=order, do_separate_z=do_separate_z,
-        #                                            order_z=order_z)[0]
+            print("separate z:", do_separate_z, "lowres axis", lowres_axis)
+            seg_old_spacing = resample_data_or_seg(segmentation[None], shape_original_after_cropping, is_seg=True,
+                                                   axis=lowres_axis, order=order, do_separate_z=do_separate_z,
+                                                   order_z=order_z)[0]
     else:
-        seg_old_spacing = segmentation.astype(np.uint8)
+        seg_old_spacing = segmentation
 
-    # bbox = dct.get('crop_bbox')
+    bbox = dct.get('crop_bbox')
 
-    # if bbox is not None:
-    #     seg_old_size = np.zeros(shape_original_before_cropping)
-    #     for c in range(3):
-    #         bbox[c][1] = np.min((bbox[c][0] + seg_old_spacing.shape[c], shape_original_before_cropping[c]))
-    #     seg_old_size[bbox[0][0]:bbox[0][1],
-    #     bbox[1][0]:bbox[1][1],
-    #     bbox[2][0]:bbox[2][1]] = seg_old_spacing
-    # else:
-    #     seg_old_size = seg_old_spacing
+    if bbox is not None:
+        seg_old_size = np.zeros(shape_original_before_cropping)
+        for c in range(3):
+            bbox[c][1] = np.min((bbox[c][0] + seg_old_spacing.shape[c], shape_original_before_cropping[c]))
+        seg_old_size[bbox[0][0]:bbox[0][1],
+        bbox[1][0]:bbox[1][1],
+        bbox[2][0]:bbox[2][1]] = seg_old_spacing
+    else:
+        seg_old_size = seg_old_spacing
 
-    seg_resized_itk = sitk.GetImageFromArray(seg_old_spacing)
+    seg_resized_itk = sitk.GetImageFromArray(seg_old_size.astype(np.uint8))
     seg_resized_itk.SetSpacing(dct['itk_spacing'])
     seg_resized_itk.SetOrigin(dct['itk_origin'])
     seg_resized_itk.SetDirection(dct['itk_direction'])
     sitk.WriteImage(seg_resized_itk, out_fname)
-    pass
 
     if not verbose:
         sys.stdout = sys.__stdout__

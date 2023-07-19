@@ -26,11 +26,10 @@ import torch
 import SimpleITK as sitk
 import shutil
 from multiprocessing import Pool
-from nnunet.postprocessing.connected_components import load_remove_save, load_postprocessing, remove_all_but_the_largest_connected_component
+from nnunet.postprocessing.connected_components import load_remove_save, load_postprocessing
 from nnunet.training.model_restore import load_model_and_checkpoint_files
 from nnunet.training.network_training.nnUNetTrainer import nnUNetTrainer
 from nnunet.utilities.one_hot_encoding import to_one_hot
-import time
 
 
 def preprocess_save_to_queue(preprocess_fn, q, list_of_lists, output_files, segs_from_prev_stage, classes,
@@ -259,6 +258,9 @@ def predict_cases(model, list_of_lists, output_filenames, folds, save_npz, num_t
                 "This output is too large for python process-process communication. Saving output temporarily to disk")
             np.save(output_filename[:-7] + ".npy", softmax)
             softmax = output_filename[:-7] + ".npy"
+        # save_segmentation_nifti_from_softmax(softmax, output_filename, dct, interpolation_order, region_class_order,
+        #                                     None, None,
+        #                                     npz_file, None, force_separate_z, interpolation_order_z)
 
         results.append(pool.starmap_async(save_segmentation_nifti_from_softmax,
                                           ((softmax, output_filename, dct, interpolation_order, region_class_order,
@@ -502,14 +504,12 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
 
         for i, p in enumerate(params):
             trainer.load_checkpoint_ram(p, False)
-            start_gpu = time.time()
             res = trainer.predict_preprocessed_data_return_seg_and_softmax(d, do_mirroring=do_tta,
                                                                            mirror_axes=trainer.data_aug_params['mirror_axes'],
                                                                            use_sliding_window=True,
                                                                            step_size=step_size, use_gaussian=True,
                                                                            all_in_gpu=all_in_gpu,
                                                                            mixed_precision=mixed_precision)
-            print('GPU Inference Time: ', time.time()-start_gpu)
             if len(params) > 1:
                 # otherwise we dont need this and we can save ourselves the time it takes to copy that
                 all_softmax_outputs[i] = res[1]
@@ -535,28 +535,16 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
             transpose_backward = trainer.plans.get('transpose_backward')
             seg = seg.transpose([i for i in transpose_backward])
 
-        # # 在这里先对seg做后处理
-        # postprocess_start = time.time()
-        # seg,_,_=remove_all_but_the_largest_connected_component(seg, for_which_classes=[1,2,3,4,6,7,8,9,11,12,13], volume_per_voxel=4.0*1.2*1.2)
-        # print('postprocess time: ',time.time()-postprocess_start)
-
-
-
         print("initializing segmentation export")
-        # results.append(pool.starmap_async(save_segmentation_nifti,
-        #                                   ((seg, output_filename, dct, 0, None),)
-        #                                   ))
-        start = time.time()
-        save_segmentation_nifti(seg, output_filename, dct, 0, None)
-        print('resample and save nifti time: ', time.time()-start)
+        results.append(pool.starmap_async(save_segmentation_nifti,
+                                          ((seg, output_filename, dct, 0, None),)
+                                          ))
         print("done")
 
-    # print("inference done. Now waiting for the segmentation export to finish...")
-    # _ = [i.get() for i in results]
+    print("inference done. Now waiting for the segmentation export to finish...")
+    _ = [i.get() for i in results]
     # now apply postprocessing
     # first load the postprocessing properties if they are present. Else raise a well visible warning
-    
-    disable_postprocessing = True
     if not disable_postprocessing:
         results = []
         pp_file = join(model, "postprocessing.json")

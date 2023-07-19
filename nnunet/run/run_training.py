@@ -74,6 +74,9 @@ def main():
                              "running postprocessing on each fold is computationally cheap, but some users have "
                              "reported issues with very large images. If your images are large (>600x600x600 voxels) "
                              "you should consider setting this flag.")
+    parser.add_argument("--disable_validation_inference", required=False, action="store_true",
+                        help="If set nnU-Net will not run inference on the validation set. This is useful if you are "
+                             "only interested in the test set results and want to save some disk space and time.")
     # parser.add_argument("--interp_order", required=False, default=3, type=int,
     #                     help="order of interpolation for segmentations. Testing purpose only. Hands off")
     # parser.add_argument("--interp_order_z", required=False, default=0, type=int,
@@ -134,7 +137,7 @@ def main():
     #     raise ValueError("force_separate_z must be None, True or False. Given: %s" % force_separate_z)
 
     plans_file, output_folder_name, dataset_directory, batch_dice, stage, \
-    trainer_class = get_default_configuration(network, task, network_trainer, plans_identifier)
+        trainer_class = get_default_configuration(network, task, network_trainer, plans_identifier)
 
     if trainer_class is None:
         raise RuntimeError("Could not find trainer class in nnunet.training.network_training")
@@ -153,7 +156,7 @@ def main():
                             deterministic=deterministic,
                             fp16=run_mixed_precision)
     if args.disable_saving:
-        trainer.save_final_checkpoint = False # whether or not to save the final checkpoint
+        trainer.save_final_checkpoint = False  # whether or not to save the final checkpoint
         trainer.save_best_checkpoint = False  # whether or not to save the best checkpoint according to
         # self.best_val_eval_criterion_MA
         trainer.save_intermediate_checkpoints = True  # whether or not to save checkpoint_latest. We need that in case
@@ -185,10 +188,13 @@ def main():
 
         trainer.network.eval()
 
-        # predict validation
-        trainer.validate(save_softmax=args.npz, validation_folder_name=val_folder,
-                         run_postprocessing_on_folds=not disable_postprocessing_on_folds,
-                         overwrite=args.val_disable_overwrite)
+        if args.disable_validation_inference:
+            print("Validation inference was disabled. Not running inference on validation set.")
+        else:
+            # predict validation
+            trainer.validate(save_softmax=args.npz, validation_folder_name=val_folder,
+                             run_postprocessing_on_folds=not disable_postprocessing_on_folds,
+                             overwrite=args.val_disable_overwrite)
 
         if network == '3d_lowres' and not args.disable_next_stage_pred:
             print("predicting segmentations for the next stage of the cascade")

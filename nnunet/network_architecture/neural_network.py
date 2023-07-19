@@ -24,8 +24,6 @@ from typing import Union, Tuple, List
 
 from torch.cuda.amp import autocast
 
-import time
-
 
 class NeuralNetwork(nn.Module):
     def __init__(self):
@@ -271,88 +269,20 @@ class SegmentationNetwork(NeuralNetwork):
 
         num_steps = [int(np.ceil((i - k) / j)) + 1 for i, j, k in zip(image_size, target_step_sizes_in_voxels, patch_size)]
 
-        # 3×3方案
-        num_steps[1] = 3
-        num_steps[2] = 3
-        # 这里假设 patch_size 为 [40, 128, 160]
-        # 先决定 z 轴的steps
         steps = []
-        max_step_value = image_size[0] - patch_size[0]
-        if num_steps[0] > 1:
-            actual_step_size = max_step_value / (num_steps[0] - 1)
-        else:
-            actual_step_size = 99999999999  # does not matter because there is only one step at 0
-        steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[0])]
-        steps.append(steps_here)
+        for dim in range(len(patch_size)):
+            # the highest step value for this dimension is
+            max_step_value = image_size[dim] - patch_size[dim]
+            if num_steps[dim] > 1:
+                actual_step_size = max_step_value / (num_steps[dim] - 1)
+            else:
+                actual_step_size = 99999999999  # does not matter because there is only one step at 0
 
-        #  决定 y 轴的steps，step个数固定为3
-        if image_size[1] > 2.0 * patch_size[1]:
-            steps_here = [int(np.round(image_size[1]/2)-1.0*patch_size[1]), int(np.round(image_size[1]/2)-0.5*patch_size[1]), int(np.round(image_size[1]/2)+0.*patch_size[1])]
-        elif image_size[1] > patch_size[1]:
-            actual_step_size = (image_size[1] - patch_size[1]) / 2
-            steps_here = [int(np.round(actual_step_size * i)) for i in range(3)]
-        else:
-            steps_here = [0]
-        steps.append(steps_here)
-        
-        # 准备 x 轴的 steps，step个数固定为3
-        if image_size[2] > 2.0 * patch_size[2]:
-            steps_here = [int(np.round(image_size[2]/2)-1.0*patch_size[2]), int(np.round(image_size[2]/2)-0.5*patch_size[2]), int(np.round(image_size[2]/2)+0.*patch_size[2])]
-        elif image_size[2] > patch_size[2]:
-            actual_step_size = (image_size[2] - patch_size[2]) / 2
-            steps_here = [int(np.round(actual_step_size * i)) for i in range(3)]
-        else:
-            steps_here = [0]
-        steps.append(steps_here)
+            steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[dim])]
 
-
-        # 3×2方案
-        # num_steps[1] = 2
-        # num_steps[2] = 3
-        # # 这里假设 patch_size 为 [40, 160, 160]
-        # # 先决定 z 轴的steps
-        # steps = []
-        # max_step_value = image_size[0] - patch_size[0]
-        # if num_steps[0] > 1:
-        #     actual_step_size = max_step_value / (num_steps[0] - 1)
-        # else:
-        #     actual_step_size = 99999999999  # does not matter because there is only one step at 0
-        # steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[0])]
-        # steps.append(steps_here)
-
-        # #  决定 y 轴的steps，step个数固定为2
-        # assert image_size[1] > 1.5 * patch_size[1]
-        # if image_size[1] > 1.5 * patch_size[1]: # 必满足
-        #     steps_here = [int(np.round(image_size[1]/2)-0.75*patch_size[1]), int(np.round(image_size[1]/2)-0.25*patch_size[1])]
-        # else:
-        #     actual_step_size = (image_size[1] - patch_size[1]) / 2
-        #     steps_here = [int(np.round(actual_step_size * i)) for i in range(3)]
-        # steps.append(steps_here)
-        
-        # # 准备 x 轴的 steps，step个数固定为3
-        # if image_size[2] > 2.0 * patch_size[2]:
-        #     steps_here = [int(np.round(image_size[2]/2)-1.0*patch_size[2]), int(np.round(image_size[2]/2)-0.5*patch_size[2]), int(np.round(image_size[2]/2)+0.*patch_size[2])]
-        # else:
-        #     actual_step_size = (image_size[2] - patch_size[2]) / 2
-        #     steps_here = [int(np.round(actual_step_size * i)) for i in range(3)]
-        # steps.append(steps_here)
+            steps.append(steps_here)
 
         return steps
-
-        
-        # for dim in range(len(patch_size)):
-        #     # the highest step value for this dimension is
-        #     max_step_value = image_size[dim] - patch_size[dim]
-        #     if num_steps[dim] > 1:
-        #         actual_step_size = max_step_value / (num_steps[dim] - 1)
-        #     else:
-        #         actual_step_size = 99999999999  # does not matter because there is only one step at 0
-
-        #     steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[dim])]
-
-        #     steps.append(steps_here)
-
-        # return steps
 
     def _internal_predict_3D_3Dconv_tiled(self, x: np.ndarray, step_size: float, do_mirroring: bool, mirror_axes: tuple,
                                           patch_size: tuple, regions_class_order: tuple, use_gaussian: bool,
@@ -405,11 +335,6 @@ class SegmentationNetwork(NeuralNetwork):
         else:
             gaussian_importance_map = None
 
-        if np.prod(data.shape[1:])>8e6:
-            all_in_gpu = False
-        else:
-            all_in_gpu = True
-
         if all_in_gpu:
             # If we run the inference in GPU only (meaning all tensors are allocated on the GPU, this reduces
             # CPU-GPU communication but required more GPU memory) we need to preallocate a few things on GPU
@@ -436,7 +361,7 @@ class SegmentationNetwork(NeuralNetwork):
 
             if verbose: print("initializing result_numsamples (on GPU)")
             aggregated_nb_of_predictions = torch.zeros([self.num_classes] + list(data.shape[1:]), dtype=torch.half,
-                                                       device=self.get_device()) + 1e-7
+                                                       device=self.get_device())
 
         else:
             if use_gaussian and num_tiles > 1:
@@ -444,158 +369,29 @@ class SegmentationNetwork(NeuralNetwork):
             else:
                 add_for_nb_of_preds = np.ones(patch_size, dtype=np.float32)
             aggregated_results = np.zeros([self.num_classes] + list(data.shape[1:]), dtype=np.float32)
-            aggregated_nb_of_predictions = np.zeros([self.num_classes] + list(data.shape[1:]), dtype=np.float32) + 1e-7
+            aggregated_nb_of_predictions = np.zeros([self.num_classes] + list(data.shape[1:]), dtype=np.float32)
 
-        is_empty = False
-        num_window = 0
-        for z in steps[0]:
+        for x in steps[0]:
+            lb_x = x
+            ub_x = x + patch_size[0]
+            for y in steps[1]:
+                lb_y = y
+                ub_y = y + patch_size[1]
+                for z in steps[2]:
+                    lb_z = z
+                    ub_z = z + patch_size[2]
 
-            if is_empty == True:
-                # 如果完全空就在 z 轴上多跳一步
-                is_empty = False
-                continue
-            
-            # 对该 xy 平面共有 9 个 window， 对正中央的 1 个 window 进行推理
-            lb_z = z
-            ub_z = z + patch_size[0]
+                    predicted_patch = self._internal_maybe_mirror_and_pred_3D(
+                        data[None, :, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z], mirror_axes, do_mirroring,
+                        gaussian_importance_map)[0]
 
-            # 看正中的 window
-            lb_y = steps[1][1]
-            ub_y = lb_y + patch_size[1]
-            lb_x = steps[2][1]
-            ub_x = lb_x + patch_size[2]
-            predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-                data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-                gaussian_importance_map)[0]
-            num_window += 1
-            is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-            is_half_empty = torch.sum(torch.argmax(predicted_patch[:,:int(0.6*patch_size[1]),:,:], 0)>0)<500
+                    if all_in_gpu:
+                        predicted_patch = predicted_patch.half()
+                    else:
+                        predicted_patch = predicted_patch.cpu().numpy()
 
-            if not (is_empty or is_half_empty):
-                labels = torch.unique(torch.argmax(predicted_patch, 0))
-                is_tube = torch.logical_or(torch.logical_or(torch.logical_or(labels==0, labels==5), labels==10), labels==6).all()
-                if is_tube:
-                    tube_front = torch.sum(torch.argmax(predicted_patch[:,:,0,:], 0)>0)>10
-                    tube_back = torch.sum(torch.argmax(predicted_patch[:,:,-1,:], 0)>0)>10
-                if all_in_gpu:
-                    predicted_patch = predicted_patch.half()
-                else:
-                    predicted_patch = predicted_patch.cpu().numpy()
-                aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-                aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
-
-                if is_tube and not (tube_front or tube_back):
-                    continue
-
-                for y in steps[1]:
-                    lb_y = y
-                    ub_y = lb_y + patch_size[1]
-                    for x in steps[2]:
-                        lb_x = x
-                        ub_x = lb_x + patch_size[2]
-
-                        if y==steps[1][1] and x==steps[2][1]: # 最中间的不用再跑了
-                            continue
-
-                        if is_tube:
-                            assert tube_front or tube_back
-                            if x != steps[2][1]:
-                                continue
-                            if tube_front and y == steps[1][0]:
-                                print('tube front')
-                            elif tube_back and y == steps[1][2]:
-                                print('tube back')
-                            else:
-                                continue
-
-                        predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-                            data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-                            gaussian_importance_map)[0]
-                        num_window += 1
-                        if all_in_gpu:
-                            predicted_patch = predicted_patch.half()
-                        else:
-                            predicted_patch = predicted_patch.cpu().numpy()
-                        aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-                        aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds   
-
-        # is_empty = False
-        # num_window = 0
-        # for z in steps[0]:
-
-        #     if is_empty == True:
-        #         # 在 z 轴上多跳一步
-        #         is_empty = False
-        #         continue
-            
-        #     # 对该 xy 平面共有 6 个 window， 对正中央的 2 个 window 进行推理
-        #     lb_z = z
-        #     ub_z = z + patch_size[0]
-
-        #     for y in steps[1]:
-        #         lb_y = y
-        #         ub_y = lb_y + patch_size[1]
-
-        #         # 先看正中的 window
-        #         lb_x = steps[2][1]
-        #         ub_x = lb_x + patch_size[2]
-        #         predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #             data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-        #             gaussian_importance_map)[0]
-        #         num_window += 1
-        #         is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-        #         # is_empty = False
-        #         if not is_empty:
-        #             if all_in_gpu:
-        #                 predicted_patch = predicted_patch.half()
-        #             else:
-        #                 predicted_patch = predicted_patch.cpu().numpy()
-        #             aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-        #             aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
-
-        #             for x in steps[2][::2]:
-        #                 lb_x = x
-        #                 ub_x = x + patch_size[2]
-        #                 predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #                     data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-        #                     gaussian_importance_map)[0]
-        #                 num_window += 1
-        #                 # 判断右前方是否包含前景，设置阈值排除假阳性
-        #                 is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-        #                 # is_empty = False
-        #                 if not is_empty:
-        #                     if all_in_gpu:
-        #                         predicted_patch = predicted_patch.half()
-        #                     else:
-        #                         predicted_patch = predicted_patch.cpu().numpy()
-        #                     aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-        #                     aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds      
-
-        #                 is_empty = False          
-        
-        print('num tiles:  ', num_tiles)
-        print('num_window: ', num_window)
-        # for x in steps[0]:
-        #     lb_x = x
-        #     ub_x = x + patch_size[0]
-        #     for y in steps[1]:
-        #         lb_y = y
-        #         ub_y = y + patch_size[1]
-        #         for z in steps[2]:
-        #             lb_z = z
-        #             ub_z = z + patch_size[2]
-
-        #             predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #                 data[None, :, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z], mirror_axes, do_mirroring,
-        #                 gaussian_importance_map)[0]
-
-        #             if all_in_gpu:
-        #                 predicted_patch = predicted_patch.half()
-        #             else:
-        #                 predicted_patch = predicted_patch.cpu().numpy()
-
-        #             aggregated_results[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += predicted_patch
-        #             aggregated_nb_of_predictions[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += add_for_nb_of_preds
+                    aggregated_results[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += predicted_patch
+                    aggregated_nb_of_predictions[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += add_for_nb_of_preds
 
         # we reverse the padding here (remeber that we padded the input to be at least as large as the patch size
         slicer = tuple(
@@ -608,32 +404,27 @@ class SegmentationNetwork(NeuralNetwork):
         aggregated_results /= aggregated_nb_of_predictions
         del aggregated_nb_of_predictions
 
-        
-        predicted_segmentation = aggregated_results.argmax(0)
-        # if regions_class_order is None:
-        #     predicted_segmentation = aggregated_results.argmax(0)
-        # else:
-        #     if all_in_gpu:
-        #         class_probabilities_here = aggregated_results.detach().cpu().numpy()
-        #     else:
-        #         class_probabilities_here = aggregated_results
-        #     predicted_segmentation = np.zeros(class_probabilities_here.shape[1:], dtype=np.float32)
-        #     for i, c in enumerate(regions_class_order):
-        #         predicted_segmentation[class_probabilities_here[i] > 0.5] = c
+        if regions_class_order is None:
+            predicted_segmentation = aggregated_results.argmax(0)
+        else:
+            if all_in_gpu:
+                class_probabilities_here = aggregated_results.detach().cpu().numpy()
+            else:
+                class_probabilities_here = aggregated_results
+            predicted_segmentation = np.zeros(class_probabilities_here.shape[1:], dtype=np.float32)
+            for i, c in enumerate(regions_class_order):
+                predicted_segmentation[class_probabilities_here[i] > 0.5] = c
 
-        # if all_in_gpu:
-        #     if verbose: print("copying results to CPU")
-
-        #     if regions_class_order is None:
-        #         predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
-
-        #     aggregated_results = aggregated_results.detach().cpu().numpy() 
         if all_in_gpu:
-            predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
-            
+            if verbose: print("copying results to CPU")
+
+            if regions_class_order is None:
+                predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
+
+            aggregated_results = aggregated_results.detach().cpu().numpy()
+
         if verbose: print("prediction done")
-        # return predicted_segmentation, aggregated_results
-        return predicted_segmentation, None
+        return predicted_segmentation, aggregated_results
 
     def _internal_predict_2D_2Dconv(self, x: np.ndarray, min_size: Tuple[int, int], do_mirroring: bool,
                                     mirror_axes: tuple = (0, 1, 2), regions_class_order: tuple = None,

@@ -350,6 +350,14 @@ class DataLoader3D(SlimDataLoaderBase):
             case_all_data = np.copy(case_all_data[:, valid_bbox_x_lb:valid_bbox_x_ub,
                                     valid_bbox_y_lb:valid_bbox_y_ub,
                                     valid_bbox_z_lb:valid_bbox_z_ub])
+            # Debug
+            # import SimpleITK as sitk
+            # for i in range(case_all_data.shape[0]):
+            #     sitk.WriteImage(sitk.GetImageFromArray(case_all_data[i]),
+            #                     os.path.join("/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_temp",
+            #                                  os.path.basename(properties["seg_file"]).replace(".nii.gz", "_{}.nii.gz".format(i))))
+            # print("crop data: ", os.path.basename(properties["seg_file"]))
+
             if seg_from_previous_stage is not None:
                 seg_from_previous_stage = seg_from_previous_stage[:, valid_bbox_x_lb:valid_bbox_x_ub,
                                           valid_bbox_y_lb:valid_bbox_y_ub,
@@ -375,6 +383,17 @@ class DataLoader3D(SlimDataLoaderBase):
                                                              (-min(0, bbox_z_lb),
                                                               max(bbox_z_ub - shape[2], 0))),
                                    'constant', **{'constant_values': 0})
+
+            # Debug
+            # for i in range(data[j].shape[0]):
+            #     sitk.WriteImage(sitk.GetImageFromArray(data[j][i]),
+            #                     os.path.join("/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_temp",
+            #                                  os.path.basename(properties["seg_file"]).replace(".nii.gz", "_{}_pad.nii.gz".format(i))))
+            # sitk.WriteImage(sitk.GetImageFromArray(seg[j, 0]),
+            #                 os.path.join("/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_temp",
+            #                              os.path.basename(properties["seg_file"]).replace(".nii.gz",
+            #                                                                               "_{}_pad.nii.gz".format(2))))
+            # print("padding data: ", os.path.basename(properties["seg_file"]))
 
         return {'data': data, 'seg': seg, 'properties': case_properties, 'keys': selected_keys}
 

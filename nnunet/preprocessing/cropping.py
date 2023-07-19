@@ -18,8 +18,6 @@ import shutil
 from batchgenerators.utilities.file_and_folder_operations import *
 from multiprocessing import Pool
 from collections import OrderedDict
-import time
-import nibabel as nib
 
 
 def create_nonzero_mask(data):
@@ -63,7 +61,6 @@ def get_case_identifier_from_npz(case):
 def load_case_from_list_of_files(data_files, seg_file=None):
     assert isinstance(data_files, list) or isinstance(data_files, tuple), "case must be either a list or a tuple"
     properties = OrderedDict()
-    start = time.time()
     data_itk = [sitk.ReadImage(f) for f in data_files]
 
     properties["original_size_of_raw_data"] = np.array(data_itk[0].GetSize())[[2, 1, 0]]
@@ -81,7 +78,6 @@ def load_case_from_list_of_files(data_files, seg_file=None):
         seg_npy = sitk.GetArrayFromImage(seg_itk)[None].astype(np.float32)
     else:
         seg_npy = None
-    print('simpleitk time: ', time.time()-start)
     return data_npy.astype(np.float32), seg_npy, properties
 
 
@@ -160,11 +156,10 @@ class ImageCropper(object):
               np.array(properties["original_spacing"]), "\n")
 
         properties["crop_bbox"] = bbox
-        # properties['classes'] = np.unique(seg)
+        properties['classes'] = np.unique(seg)
         # seg[seg < -1] = 0
         properties["size_after_cropping"] = data[0].shape
-        # return data, seg, properties
-        return data, properties
+        return data, seg, properties
 
     @staticmethod
     def crop_from_list_of_files(data_files, seg_file=None):
