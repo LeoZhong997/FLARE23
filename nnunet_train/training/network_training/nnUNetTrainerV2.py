@@ -36,6 +36,7 @@ from torch.cuda.amp import autocast
 from nnunet.training.learning_rate.poly_lr import poly_lr
 from batchgenerators.utilities.file_and_folder_operations import *
 
+TRAINING_DEBUG = False
 
 class nnUNetTrainerV2(nnUNetTrainer):
     """
@@ -86,6 +87,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
             weights[~mask] = 0
             weights = weights / weights.sum()
             self.ds_loss_weights = weights
+            print("###initialize loss Debug: ", weights, net_numpool)
             # now wrap the loss
             self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
             ################# END ###################
@@ -234,6 +236,29 @@ class nnUNetTrainerV2(nnUNetTrainer):
         data_dict = next(data_generator)
         data = data_dict['data']
         target = data_dict['target']
+        if TRAINING_DEBUG:
+            seg_path = [i["seg_file"] for i in data_dict.get("properties")]
+            pid = [os.path.basename(s).split(".nii.gz")[0] for s in seg_path]
+            print("###run_iteration Debug: ", pid, len(data), "cases", len(target), "deep supervision")
+            import SimpleITK as sitk
+            for i in range(len(data)):
+                print("###run_iteration Debug: ", i, pid, data[i].shape, target[0].shape)
+
+                for n in range(len(data[i])):
+                    torch_data = data[i][n]
+                    numpy_data = torch_data.detach().cpu().numpy()
+                    save_path = os.path.join("/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_temp",
+                                             "{}_channel{}_data.nii.gz".format(pid[i], n))
+                    if not os.path.exists(save_path):
+                        sitk.WriteImage(sitk.GetImageFromArray(numpy_data), save_path)
+
+                torch_data = target[0][i][0]
+                numpy_data = torch_data.detach().cpu().numpy()
+                save_path = os.path.join("/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_temp",
+                                         "{}_seg.nii.gz".format(pid[i]))
+                if not os.path.exists(save_path):
+                    sitk.WriteImage(sitk.GetImageFromArray(numpy_data), save_path)
+
 
         data = maybe_to_torch(data)
         target = maybe_to_torch(target)

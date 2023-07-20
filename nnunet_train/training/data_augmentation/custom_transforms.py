@@ -378,7 +378,7 @@ class SaveTransform(AbstractTransform):
         seg_path = [i["seg_file"] for i in data_dict.get("properties")]
         data_path = [i["list_of_data_files"] for i in data_dict.get("properties")]
         pid = [os.path.basename(s).split(".nii.gz")[0] for s in seg_path]
-        print("saving training file...: ", pid, self.prefix)
+        print("saving training file...: ", pid, self.prefix, data.shape, seg.shape)
         for b in range(data.shape[0]):
             for c in range(data.shape[1]):
                 save_path = os.path.join(self.save_base, pid[b] +

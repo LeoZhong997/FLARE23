@@ -222,6 +222,7 @@ def get_moreDA_augmentation_multi_data(dataloader_train, dataloader_val, patch_s
                                        use_nondetMultiThreadedAugmenter: bool = False):
     assert params.get('mirror') is None, "old version of params, use new keyword do_mirror"
     print("+++get_moreDA_augmentation_multi_data params: ", params)
+    print("+++deep_supervision_scales and soft_ds: ", deep_supervision_scales, soft_ds)
 
     tr_transforms = []
 
