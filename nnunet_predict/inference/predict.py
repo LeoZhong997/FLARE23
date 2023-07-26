@@ -542,24 +542,23 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
         # seg,_,_=remove_all_but_the_largest_connected_component(seg, for_which_classes=[1,2,3,4,6,7,8,9,11,12,13], volume_per_voxel=4.0*1.2*1.2)
         # print('postprocess time: ',time.time()-postprocess_start)
 
-
-
         print("initializing segmentation export")
         # results.append(pool.starmap_async(save_segmentation_nifti,
         #                                   ((seg, output_filename, dct, 0, None),)
         #                                   ))
         start = time.time()
         save_segmentation_nifti(seg, output_filename, dct, 0, None)
-        if len(params) > 1:
-            output_folder_name = output_filename.split("/")[-2]
-            save_base = output_filename.split(output_folder_name)[0]
-            for f, soft_output in enumerate(all_softmax_outputs):
-                maybe_mkdir_p(os.path.join(save_base, output_folder_name + f"_fold{f}"))
-                seg_ = soft_output.argmax(0)
-                print(f, all_softmax_outputs.shape, soft_output.shape, seg_.shape, seg.shape)
-                save_segmentation_nifti(seg_,
-                                        output_filename.replace(output_folder_name, output_folder_name + f"_fold{f}"),
-                                        dct, 0, None)
+        # save all folds result
+        # if len(params) > 1:
+        #     output_folder_name = output_filename.split("/")[-2]
+        #     save_base = output_filename.split(output_folder_name)[0]
+        #     for f, soft_output in enumerate(all_softmax_outputs):
+        #         maybe_mkdir_p(os.path.join(save_base, output_folder_name + f"_fold{f}"))
+        #         seg_ = soft_output.argmax(0)
+        #         print(f, all_softmax_outputs.shape, soft_output.shape, seg_.shape, seg.shape)
+        #         save_segmentation_nifti(seg_,
+        #                                 output_filename.replace(output_folder_name, output_folder_name + f"_fold{f}"),
+        #                                 dct, 0, None)
         print('resample and save nifti time: ', time.time()-start)
         print("done")
 
