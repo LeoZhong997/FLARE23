@@ -81,7 +81,7 @@ def process(pid, image_dir, label_dir, pseudo_label_dir, target_imagesTr, target
     pseudo_label = join(pseudo_label_dir, pid + ".nii.gz")  # without tumor label
     gt_label = join(label_dir, pid + ".nii.gz")  # with tumor label
     assert all([isfile(ct), isfile(gt_label)]), "{} has wrong paths".format(pid)
-    print("pass: ", pid)
+    print("process: ", pid)
 
     new_ct = join(target_imagesTr, pid + "_0000.nii.gz")
     aux_label = join(target_imagesTr, pid + "_0001.nii.gz")
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     blackbean_pseudo_label_dir = join(data_dir, "blackbean-pseudo-labels-FLARE23")  # method without postprocess
     image_dir = join(data_dir, "imagesTr2200")
     val_image_dir = join(data_dir, "validation")
-    pid_table_path = "/home/zhongzhiqiang/PreResearch/FLARE2023/tables/labelsTr222_fullTumor.xlsx"
+    pid_table_path = "/home/zhongzhiqiang/PreResearch/FLARE2023/tables/labelsTr1497_fullTumor.xlsx"
 
     target_base = join(nnUNet_raw_data, task_name)
     target_imagesTr = join(target_base, "imagesTr")

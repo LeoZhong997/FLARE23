@@ -495,6 +495,12 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
             os.remove(d)
             d = data
 
+        # print(">>>d shape: ", d.shape)
+        # save_path = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_temp/" + os.path.basename(output_filename)
+        # for chn in range(len(d)):
+        #     sitk.WriteImage(sitk.GetImageFromArray(d[chn]),
+        #                     save_path.replace(".nii.gz", f"_{chn}.nii.gz"))
+
         # preallocate the output arrays
         # same dtype as the return value in predict_preprocessed_data_return_seg_and_softmax (saves time)
         all_softmax_outputs = np.zeros((len(params), trainer.num_classes, *d.shape[1:]), dtype=np.float16)

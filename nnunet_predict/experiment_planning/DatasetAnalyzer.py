@@ -162,7 +162,7 @@ class DatasetAnalyzer(object):
         all_data = np.load(join(self.folder_with_cropped_data, patient_identifier) + ".npz")['data']
         modality = all_data[modality_id]
         mask = all_data[-1] > 0
-        voxels = list(modality[mask][::10]) # no need to take every voxel
+        voxels = list(modality[mask][::10])     # no need to take every voxel, take slice data with 10 slice interval
         return voxels
 
     @staticmethod
