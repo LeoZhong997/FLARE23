@@ -162,7 +162,7 @@ class DatasetAnalyzer(object):
         all_data = np.load(join(self.folder_with_cropped_data, patient_identifier) + ".npz")['data']
         modality = all_data[modality_id]
         mask = all_data[-1] > 0
-        voxels = list(modality[mask][::10])     # no need to take every voxel, take slice data with 10 slice interval
+        voxels = list(modality[mask][::10]) # no need to take every voxel
         return voxels
 
     @staticmethod
@@ -178,16 +178,13 @@ class DatasetAnalyzer(object):
         percentile_00_5 = np.percentile(voxels, 00.5)
         return median, mean, sd, mn, mx, percentile_99_5, percentile_00_5
 
-    def collect_intensity_properties(self, modalities):
+    def collect_intensity_properties(self, num_modalities):
         if self.overwrite or not isfile(self.intensityproperties_file):
             p = Pool(self.num_processes)
 
             results = OrderedDict()
-            for mod_id in range(len(modalities)):
-                modality = modalities[mod_id]
+            for mod_id in range(num_modalities):
                 results[mod_id] = OrderedDict()
-                if modality == "seg":
-                    continue
                 v = p.starmap(self._get_voxels_in_foreground, zip(self.patient_identifiers,
                                                               [mod_id] * len(self.patient_identifiers)))
 
@@ -240,7 +237,7 @@ class DatasetAnalyzer(object):
 
         # collect intensity information
         if collect_intensityproperties:
-            intensityproperties = self.collect_intensity_properties(modalities)
+            intensityproperties = self.collect_intensity_properties(len(modalities))
         else:
             intensityproperties = None
 

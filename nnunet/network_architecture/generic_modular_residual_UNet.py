@@ -28,9 +28,9 @@ from torch.backends import cudnn
 class ResidualUNetEncoder(nn.Module):
     def __init__(self, input_channels, base_num_features, num_blocks_per_stage, feat_map_mul_on_downscale,
                  pool_op_kernel_sizes, conv_kernel_sizes, props, default_return_skips=True,
-                 max_num_features=480, block=BasicResidualBlock, block_kwargs=None):
+                 max_num_features=480, block=BasicResidualBlock):
         """
-        Following UNet building blocks can be added by utilizing the properties this class exposes
+        Following UNet building blocks can be added by utilizing the properties this class exposes (TODO)
 
         this one includes the bottleneck layer!
 
@@ -43,9 +43,6 @@ class ResidualUNetEncoder(nn.Module):
         :param props:
         """
         super(ResidualUNetEncoder, self).__init__()
-
-        if block_kwargs is None:
-            block_kwargs = {}
 
         self.default_return_skips = default_return_skips
         self.props = props
@@ -77,18 +74,15 @@ class ResidualUNetEncoder(nn.Module):
             current_pool_kernel_size = pool_op_kernel_sizes[stage]
 
             current_stage = ResidualLayer(current_input_features, current_output_features, current_kernel_size, props,
-                                          self.num_blocks_per_stage[stage], current_pool_kernel_size, block,
-                                          block_kwargs)
+                                          self.num_blocks_per_stage[stage], current_pool_kernel_size, block)
 
             self.stages.append(current_stage)
-            self.stage_output_features.append(current_stage.output_channels)
+            self.stage_output_features.append(current_output_features)
             self.stage_conv_op_kernel_size.append(current_kernel_size)
             self.stage_pool_kernel_size.append(current_pool_kernel_size)
 
             # update current_input_features
-            current_input_features = current_stage.output_channels
-
-        self.output_features = current_input_features
+            current_input_features = current_output_features
 
         self.stages = nn.ModuleList(self.stages)
 
@@ -109,8 +103,6 @@ class ResidualUNetEncoder(nn.Module):
 
         if return_skips is None:
             return_skips = self.default_return_skips
-
-        # print(x.shape)
 
         if return_skips:
             return skips
@@ -141,10 +133,8 @@ class ResidualUNetEncoder(nn.Module):
 
 class ResidualUNetDecoder(nn.Module):
     def __init__(self, previous, num_classes, num_blocks_per_stage=None, network_props=None, deep_supervision=False,
-                 upscale_logits=False, block=BasicResidualBlock, block_kwargs=None):
+                 upscale_logits=False, block=BasicResidualBlock):
         super(ResidualUNetDecoder, self).__init__()
-        if block_kwargs is None:
-            block_kwargs = {}
         self.num_classes = num_classes
         self.deep_supervision = deep_supervision
         """
@@ -196,17 +186,17 @@ class ResidualUNetDecoder(nn.Module):
                                        previous_stage_pool_kernel_size[s + 1], bias=False))
             # after we tu we concat features so now we have 2xfeatures_skip
             self.stages.append(ResidualLayer(2 * features_skip, features_skip, previous_stage_conv_op_kernel_size[s],
-                                             self.props, num_blocks_per_stage[i], None, block, block_kwargs))
+                                             self.props, num_blocks_per_stage[i], None, block))
 
             if deep_supervision and s != 0:
-                seg_layer = self.props['conv_op'](features_skip, num_classes, 1, 1, 0, 1, 1, bias=True)
+                seg_layer = self.props['conv_op'](features_skip, num_classes, 1, 1, 0, 1, 1, False)
                 if upscale_logits:
                     upsample = Upsample(scale_factor=cum_upsample[s], mode=upsample_mode)
                     self.deep_supervision_outputs.append(nn.Sequential(seg_layer, upsample))
                 else:
                     self.deep_supervision_outputs.append(seg_layer)
 
-        self.segmentation_output = self.props['conv_op'](features_skip, num_classes, 1, 1, 0, 1, 1, bias=True)
+        self.segmentation_output = self.props['conv_op'](features_skip, num_classes, 1, 1, 0, 1, 1, False)
 
         self.tus = nn.ModuleList(self.tus)
         self.stages = nn.ModuleList(self.stages)
@@ -279,21 +269,16 @@ class ResidualUNet(SegmentationNetwork):
     def __init__(self, input_channels, base_num_features, num_blocks_per_stage_encoder, feat_map_mul_on_downscale,
                  pool_op_kernel_sizes, conv_kernel_sizes, props, num_classes, num_blocks_per_stage_decoder,
                  deep_supervision=False, upscale_logits=False, max_features=512, initializer=None,
-                 block=BasicResidualBlock, block_kwargs=None):
+                 block=BasicResidualBlock):
         super(ResidualUNet, self).__init__()
-
-        if block_kwargs is None:
-            block_kwargs = {}
-
         self.conv_op = props['conv_op']
         self.num_classes = num_classes
 
         self.encoder = ResidualUNetEncoder(input_channels, base_num_features, num_blocks_per_stage_encoder,
                                            feat_map_mul_on_downscale, pool_op_kernel_sizes, conv_kernel_sizes,
-                                           props, default_return_skips=True, max_num_features=max_features,
-                                           block=block, block_kwargs=block_kwargs)
+                                           props, default_return_skips=True, max_num_features=max_features, block=block)
         self.decoder = ResidualUNetDecoder(self.encoder, num_classes, num_blocks_per_stage_decoder, props,
-                                           deep_supervision, upscale_logits, block=block, block_kwargs=block_kwargs)
+                                           deep_supervision, upscale_logits, block=block)
         if initializer is not None:
             self.apply(initializer)
 
@@ -331,19 +316,14 @@ class FabiansUNet(SegmentationNetwork):
                  pool_op_kernel_sizes, conv_kernel_sizes, props, num_classes, num_blocks_per_stage_decoder,
                  deep_supervision=False, upscale_logits=False, max_features=512, initializer=None,
                  block=BasicResidualBlock,
-                 props_decoder=None, block_kwargs=None):
+                 props_decoder=None):
         super().__init__()
-
-        if block_kwargs is None:
-            block_kwargs = {}
-
         self.conv_op = props['conv_op']
         self.num_classes = num_classes
 
         self.encoder = ResidualUNetEncoder(input_channels, base_num_features, num_blocks_per_stage_encoder,
                                            feat_map_mul_on_downscale, pool_op_kernel_sizes, conv_kernel_sizes,
-                                           props, default_return_skips=True, max_num_features=max_features,
-                                           block=block, block_kwargs=block_kwargs)
+                                           props, default_return_skips=True, max_num_features=max_features, block=block)
         props['dropout_op_kwargs']['p'] = 0
         if props_decoder is None:
             props_decoder = props

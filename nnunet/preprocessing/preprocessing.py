@@ -23,6 +23,9 @@ from scipy.ndimage.interpolation import map_coordinates
 import numpy as np
 from batchgenerators.utilities.file_and_folder_operations import *
 from multiprocessing.pool import Pool
+import time
+import torch.nn.functional as F
+import torch
 
 
 def get_do_separate_z(spacing, anisotropy_threshold=RESAMPLING_SEPARATE_Z_ANISO_THRESHOLD):
@@ -37,7 +40,7 @@ def get_lowres_axis(new_spacing):
 
 def resample_patient(data, seg, original_spacing, target_spacing, order_data=3, order_seg=0, force_separate_z=False,
                      order_z_data=0, order_z_seg=0,
-                     separate_z_anisotropy_threshold=RESAMPLING_SEPARATE_Z_ANISO_THRESHOLD, all_modalities=None):
+                     separate_z_anisotropy_threshold=RESAMPLING_SEPARATE_Z_ANISO_THRESHOLD):
     """
     :param data:
     :param seg:
@@ -66,47 +69,56 @@ def resample_patient(data, seg, original_spacing, target_spacing, order_data=3, 
         shape = np.array(seg[0].shape)
     new_shape = np.round(((np.array(original_spacing) / np.array(target_spacing)).astype(float) * shape)).astype(int)
 
-    if force_separate_z is not None:
-        do_separate_z = force_separate_z
-        if force_separate_z:
-            axis = get_lowres_axis(original_spacing)
-        else:
-            axis = None
-    else:
-        if get_do_separate_z(original_spacing, separate_z_anisotropy_threshold):
-            do_separate_z = True
-            axis = get_lowres_axis(original_spacing)
-        elif get_do_separate_z(target_spacing, separate_z_anisotropy_threshold):
-            do_separate_z = True
-            axis = get_lowres_axis(target_spacing)
-        else:
-            do_separate_z = False
-            axis = None
+    data_torch = torch.from_numpy(data).to(torch.float32)
+    data_torch = torch.unsqueeze(data_torch, 0)
+    new_size = tuple(new_shape.tolist())
+    reshaped_final_data = F.interpolate(data_torch, size=new_size, mode='trilinear', align_corners=False)
+    reshaped_final_data = torch.squeeze(reshaped_final_data, 0)
+    reshaped_final_data = reshaped_final_data.numpy()
+    
+    return reshaped_final_data
+    # if force_separate_z is not None:
+    #     do_separate_z = force_separate_z
+    #     if force_separate_z:
+    #         axis = get_lowres_axis(original_spacing)
+    #     else:
+    #         axis = None
+    # else:
+    #     if get_do_separate_z(original_spacing, separate_z_anisotropy_threshold):
+    #         do_separate_z = True
+    #         axis = get_lowres_axis(original_spacing)
+    #     elif get_do_separate_z(target_spacing, separate_z_anisotropy_threshold):
+    #         do_separate_z = True
+    #         axis = get_lowres_axis(target_spacing)
+    #     else:
+    #         do_separate_z = False
+    #         axis = None
+    # axis = np.array([0]) # 直接手动敲定
+    # if axis is not None:
+    #     if len(axis) == 3:
+    #         # every axis has the spacing, this should never happen, why is this code here?
+    #         do_separate_z = False
+    #     elif len(axis) == 2:
+    #         # this happens for spacings like (0.24, 1.25, 1.25) for example. In that case we do not want to resample
+    #         # separately in the out of plane axis
+    #         do_separate_z = False
+    #     else:
+    #         pass
 
-    if axis is not None:
-        if len(axis) == 3:
-            # every axis has the spacing, this should never happen, why is this code here?
-            do_separate_z = False
-        elif len(axis) == 2:
-            # this happens for spacings like (0.24, 1.25, 1.25) for example. In that case we do not want to resample
-            # separately in the out of plane axis
-            do_separate_z = False
-        else:
-            pass
-
-    if data is not None:
-        data_reshaped = resample_data_or_seg(data, new_shape, False, axis, order_data, do_separate_z,
-                                             order_z=order_z_data, all_modalities=all_modalities)
-    else:
-        data_reshaped = None
-    if seg is not None:
-        seg_reshaped = resample_data_or_seg(seg, new_shape, True, axis, order_seg, do_separate_z, order_z=order_z_seg)
-    else:
-        seg_reshaped = None
-    return data_reshaped, seg_reshaped
+    # if data is not None:
+    #     data_reshaped = resample_data_or_seg(data, new_shape, False, axis, order_data, do_separate_z,
+    #                                          order_z=order_z_data)
+    # else:
+    #     data_reshaped = None
+    # if seg is not None:
+    #     seg_reshaped = resample_data_or_seg(seg, new_shape, True, axis, order_seg, do_separate_z, order_z=order_z_seg)
+    # else:
+    #     seg_reshaped = None
+    # # return data_reshaped, seg_reshaped
+    # return data_reshaped
 
 
-def resample_data_or_seg(data, new_shape, is_seg, axis=None, order=3, do_separate_z=False, order_z=0, all_modalities=None):
+def resample_data_or_seg(data, new_shape, is_seg, axis=None, order=3, do_separate_z=False, order_z=0):
     """
     separate_z=True will resample with order 0 along z
     :param data:
@@ -120,25 +132,12 @@ def resample_data_or_seg(data, new_shape, is_seg, axis=None, order=3, do_separat
     """
     assert len(data.shape) == 4, "data must be (c, x, y, z)"
     assert len(new_shape) == len(data.shape) - 1
-    len_data = data.shape[0]
     if is_seg:
-        resize_fn = [resize_segmentation] * len_data
-        kwargs = [OrderedDict()] * len_data
+        resize_fn = resize_segmentation
+        kwargs = OrderedDict()
     else:
-        if all_modalities is None:
-            resize_fn = [resize] * len_data
-            kwargs = [{'mode': 'edge', 'anti_aliasing': False}] * len_data
-        else:
-            resize_fn = []
-            kwargs = []
-            for c in range(data.shape[0]):
-                if all_modalities[c] == "seg":
-                    resize_fn.append(resize_segmentation)
-                    kwargs.append(OrderedDict())
-                else:
-                    resize_fn.append(resize)
-                    kwargs.append({'mode': 'edge', 'anti_aliasing': False})
-
+        resize_fn = resize
+        kwargs = {'mode': 'edge', 'anti_aliasing': False}
     dtype_data = data.dtype
     shape = np.array(data[0].shape)
     new_shape = np.array(new_shape)
@@ -160,11 +159,11 @@ def resample_data_or_seg(data, new_shape, is_seg, axis=None, order=3, do_separat
                 reshaped_data = []
                 for slice_id in range(shape[axis]):
                     if axis == 0:
-                        reshaped_data.append(resize_fn[c](data[c, slice_id], new_shape_2d, order, **kwargs[c]).astype(dtype_data))
+                        reshaped_data.append(resize_fn(data[c, slice_id], new_shape_2d, order, **kwargs).astype(dtype_data))
                     elif axis == 1:
-                        reshaped_data.append(resize_fn[c](data[c, :, slice_id], new_shape_2d, order, **kwargs[c]).astype(dtype_data))
+                        reshaped_data.append(resize_fn(data[c, :, slice_id], new_shape_2d, order, **kwargs).astype(dtype_data))
                     else:
-                        reshaped_data.append(resize_fn[c](data[c, :, :, slice_id], new_shape_2d, order, **kwargs[c]).astype(dtype_data))
+                        reshaped_data.append(resize_fn(data[c, :, :, slice_id], new_shape_2d, order, **kwargs).astype(dtype_data))
                 reshaped_data = np.stack(reshaped_data, axis)
                 if shape[axis] != new_shape[axis]:
 
@@ -202,7 +201,7 @@ def resample_data_or_seg(data, new_shape, is_seg, axis=None, order=3, do_separat
             print("no separate z, order", order)
             reshaped = []
             for c in range(data.shape[0]):
-                reshaped.append(resize_fn[c](data[c], new_shape, order, **kwargs[c])[None].astype(dtype_data))
+                reshaped.append(resize_fn(data[c], new_shape, order, **kwargs)[None].astype(dtype_data))
             reshaped_final_data = np.vstack(reshaped)
         return reshaped_final_data.astype(dtype_data)
     else:
@@ -236,7 +235,7 @@ class GenericPreprocessor(object):
             properties = pickle.load(f)
         return data, seg, properties
 
-    def resample_and_normalize(self, data, target_spacing, properties, seg=None, force_separate_z=None, all_modalities=None):
+    def resample_and_normalize(self, data, target_spacing, properties, seg=None, force_separate_z=None):
         """
         data and seg must already have been transposed by transpose_forward. properties are the un-transposed values
         (spacing etc)
@@ -259,12 +258,12 @@ class GenericPreprocessor(object):
 
         # remove nans
         data[np.isnan(data)] = 0
-
-        data, seg = resample_patient(data, seg, np.array(original_spacing_transposed), target_spacing,
+        start_resample = time.time()
+        data = resample_patient(data, seg, np.array(original_spacing_transposed), target_spacing,
                                      self.resample_order_data, self.resample_order_seg,
                                      force_separate_z=force_separate_z, order_z_data=0, order_z_seg=0,
-                                     separate_z_anisotropy_threshold=self.resample_separate_z_anisotropy_threshold,
-                                     all_modalities=all_modalities)
+                                     separate_z_anisotropy_threshold=self.resample_separate_z_anisotropy_threshold)
+        print('resample time: ', time.time() - start_resample)
         after = {
             'spacing': target_spacing,
             'data.shape (data is resampled)': data.shape
@@ -322,27 +321,27 @@ class GenericPreprocessor(object):
                     std = data[c].std()
                     # print(data[c].shape, data[c].dtype, mn, std)
                     data[c] = (data[c] - mn) / (std + 1e-8)
-        return data, seg, properties
+        # return data, seg, properties
+        return data, properties
 
-    def preprocess_test_case(self, data_files, target_spacing, seg_file=None, force_separate_z=None):
-        data, seg, properties = ImageCropper.crop_from_list_of_files(data_files, seg_file)
-
+    def preprocess_test_case(self, data_files, target_spacing, seg_file=None, force_separate_z=True): # 改为 True
+        data, properties = ImageCropper.crop_from_list_of_files(data_files, seg_file)
         data = data.transpose((0, *[i + 1 for i in self.transpose_forward]))
-        seg = seg.transpose((0, *[i + 1 for i in self.transpose_forward]))
-
-        data, seg, properties = self.resample_and_normalize(data, target_spacing, properties, seg,
+        # seg = seg.transpose((0, *[i + 1 for i in self.transpose_forward]))
+        seg = None
+        data,  properties = self.resample_and_normalize(data, target_spacing, properties, seg,
                                                             force_separate_z=force_separate_z)
         return data.astype(np.float32), seg, properties
 
     def _run_internal(self, target_spacing, case_identifier, output_folder_stage, cropped_output_dir, force_separate_z,
-                      all_classes, all_modalities):
+                      all_classes):
         data, seg, properties = self.load_cropped(cropped_output_dir, case_identifier)
 
         data = data.transpose((0, *[i + 1 for i in self.transpose_forward]))
         seg = seg.transpose((0, *[i + 1 for i in self.transpose_forward]))
 
         data, seg, properties = self.resample_and_normalize(data, target_spacing,
-                                                            properties, seg, force_separate_z, all_modalities)
+                                                            properties, seg, force_separate_z)
 
         all_data = np.vstack((data, seg)).astype(np.float32)
 
@@ -365,7 +364,6 @@ class GenericPreprocessor(object):
             class_locs[c] = selected
             print(c, target_num_samples)
         properties['class_locations'] = class_locs
-        properties['all_modalities'] = all_modalities
 
         print("saving: ", os.path.join(output_folder_stage, "%s.npz" % case_identifier))
         np.savez_compressed(os.path.join(output_folder_stage, "%s.npz" % case_identifier),
@@ -399,10 +397,6 @@ class GenericPreprocessor(object):
         # located. This is needed for oversampling foreground
         all_classes = load_pickle(join(input_folder_with_cropped_npz, 'dataset_properties.pkl'))['all_classes']
 
-        # we need to know modalities of data
-        all_modalities = load_pickle(join(input_folder_with_cropped_npz, 'dataset_properties.pkl'))['modalities']
-        print("zzq debug in GenericPreprocessor.run(): all_modalities={}, all_classes={}".format(all_modalities, all_classes))
-
         for i in range(num_stages):
             all_args = []
             output_folder_stage = os.path.join(output_folder, data_identifier + "_stage%d" % i)
@@ -410,7 +404,7 @@ class GenericPreprocessor(object):
             spacing = target_spacings[i]
             for j, case in enumerate(list_of_cropped_npz_files):
                 case_identifier = get_case_identifier_from_npz(case)
-                args = spacing, case_identifier, output_folder_stage, input_folder_with_cropped_npz, force_separate_z, all_classes, all_modalities
+                args = spacing, case_identifier, output_folder_stage, input_folder_with_cropped_npz, force_separate_z, all_classes
                 all_args.append(args)
             p = Pool(num_threads[i])
             p.starmap(self._run_internal, all_args)

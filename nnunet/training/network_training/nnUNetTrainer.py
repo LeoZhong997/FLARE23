@@ -665,16 +665,18 @@ class nnUNetTrainer(NetworkTrainer):
         for f in subfiles(self.gt_niftis_folder, suffix=".nii.gz"):
             success = False
             attempts = 0
+            e = None
             while not success and attempts < 10:
                 try:
                     shutil.copy(f, gt_nifti_folder)
                     success = True
-                except OSError:
-                    print("Could not copy gt nifti file %s into folder %s" % (f, gt_nifti_folder))
+                except OSError as e:
                     attempts += 1
                     sleep(1)
             if not success:
-                raise OSError(f"Something went wrong while copying nifti files to {gt_nifti_folder}. See above for the trace.")
+                print("Could not copy gt nifti file %s into folder %s" % (f, gt_nifti_folder))
+                if e is not None:
+                    raise e
 
         self.network.train(current_mode)
 

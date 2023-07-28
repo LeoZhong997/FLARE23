@@ -70,8 +70,6 @@ def copy_gt_label_without_tumor(in_file, out_file):
 
 
 def process(pid, image_dir, label_dir, pseudo_label_dir, target_imagesTr, target_labelsTr):
-    second_channel_name = "pseudo"  # "pseudo" or "gt"
-
     ct = join(image_dir, pid + "_0000.nii.gz")
     for img_sub_dir in ["1-500", "501-1000", "1001-1500", "1501-2000"]:
         if isfile(ct):
@@ -81,30 +79,38 @@ def process(pid, image_dir, label_dir, pseudo_label_dir, target_imagesTr, target
     pseudo_label = join(pseudo_label_dir, pid + ".nii.gz")  # without tumor label
     gt_label = join(label_dir, pid + ".nii.gz")  # with tumor label
     assert all([isfile(ct), isfile(gt_label)]), "{} has wrong paths".format(pid)
-    print("pass: ", pid)
+    print("process: ", pid)
 
     new_ct = join(target_imagesTr, pid + "_0000.nii.gz")
-    aux_label = join(target_imagesTr, pid + "_0001.nii.gz")
     tumor_label = join(target_labelsTr, pid + ".nii.gz")
-    if not (isfile(new_ct) and isfile(aux_label) and isfile(tumor_label)):
+    if not (isfile(new_ct) and isfile(tumor_label)):
+    # if True:
         ct_img = sitk.ReadImage(ct)
         ct_direction = ct_img.GetDirection()
+        gt_npy = sitk.GetArrayFromImage(sitk.ReadImage(gt_label)).astype(np.uint8)
+        pseudo_npy = sitk.GetArrayFromImage(sitk.ReadImage(pseudo_label)).astype(np.uint8)
         print(pid, ct_direction, ct, gt_label, pseudo_label)
+        print(pid, "gt_npy, pseudo_npy: ", np.unique(gt_npy), np.unique(pseudo_npy))
         if -1 not in ct_direction:
             shutil.copy(ct, new_ct)
-            if second_channel_name == "pseudo":
-                shutil.copy(pseudo_label, aux_label)
-            else:
-                copy_gt_label_without_tumor(gt_label, aux_label)
 
-            copy_FLARE2023_tumor_segmentation_and_convert_labels(gt_label, tumor_label)
+            tumor_npy = gt_npy * 0
+            pseudo_npy[gt_npy != 14] = 0
+            tumor_npy[gt_npy == 14] = 14
+            for i in np.unique(pseudo_npy):
+                if i == 0:
+                    continue
+                tumor_npy[pseudo_npy == i] = i
+
+            tumor_img = sitk.GetImageFromArray(tumor_npy)
+            tumor_img.CopyInformation(ct_img)
+            sitk.WriteImage(tumor_img, tumor_label)
+
+            # copy_FLARE2023_tumor_segmentation_and_convert_labels(gt_label, tumor_label)
         else:
             ct_npy = sitk.GetArrayFromImage(ct_img)
             ct_spacing = ct_img.GetSpacing()
             ct_origin = ct_img.GetOrigin()
-
-            gt_npy = sitk.GetArrayFromImage(sitk.ReadImage(gt_label))
-            pseudo_npy = sitk.GetArrayFromImage(sitk.ReadImage(pseudo_label))
 
             [ct_npy, gt_npy, pseudo_npy], new_direction, new_origin = correct_direction(
                 [ct_npy, gt_npy, pseudo_npy], ct_direction, ct_origin, ct_spacing)
@@ -117,41 +123,43 @@ def process(pid, image_dir, label_dir, pseudo_label_dir, target_imagesTr, target
             new_ct_img.SetDirection(new_direction)
             sitk.WriteImage(new_ct_img, new_ct)
 
-            tumor_npy = np.zeros_like(gt_npy)
-            tumor_npy[gt_npy == 14] = 1
+            tumor_npy = gt_npy * 0
+            pseudo_npy[gt_npy != 14] = 0
+            tumor_npy[gt_npy == 14] = 14
+            for i in np.unique(pseudo_npy):
+                if i == 0:
+                    continue
+                tumor_npy[pseudo_npy == i] = i
             new_gt_img = sitk.GetImageFromArray(tumor_npy)
             new_gt_img.SetSpacing(ct_spacing)
             new_gt_img.SetOrigin(new_origin)
             new_gt_img.SetDirection(new_direction)
             sitk.WriteImage(new_gt_img, tumor_label)
 
-            new_pseudo_img = sitk.GetImageFromArray(pseudo_npy)
-            new_pseudo_img.SetSpacing(ct_spacing)
-            new_pseudo_img.SetOrigin(new_origin)
-            new_pseudo_img.SetDirection(new_direction)
-            sitk.WriteImage(new_pseudo_img, aux_label)
-
-            print(pid, "origin check: {}, {}, {}".format(
-                new_ct_img.GetOrigin(), new_gt_img.GetOrigin(), new_pseudo_img.GetOrigin()))
+            print(pid, "origin check: {}, {}".format(
+                new_ct_img.GetOrigin(), new_gt_img.GetOrigin()))
+        print(pid, "tumor_npy: ", np.unique(tumor_npy))
 
 
 if __name__ == "__main__":
     num_processes = 8
 
-    task_name = "Task025_FLARE23TumorWithOAR"
+    task_name = "Task026_FLARE23TumorMultiLabel"
     data_dir = "/data/result/herongxuan/dataset/Release"
     label_dir = join(data_dir, "labelsTr2200")
     aladdin5_pseudo_label_dir = join(data_dir, "aladdin5-pseudo-labels-FLARE23")
     blackbean_pseudo_label_dir = join(data_dir, "blackbean-pseudo-labels-FLARE23")  # method without postprocess
     image_dir = join(data_dir, "imagesTr2200")
     val_image_dir = join(data_dir, "validation")
-    pid_table_path = "/home/zhongzhiqiang/PreResearch/FLARE2023/tables/labelsTr222_fullTumor.xlsx"
+    pid_table_path = "/home/zhongzhiqiang/PreResearch/FLARE2023/tables/labelsTr1497_fullTumor.xlsx"
 
     target_base = join(nnUNet_raw_data, task_name)
     target_imagesTr = join(target_base, "imagesTr")
     target_imagesVal = join(target_base, "imagesVal")
     target_imagesTs = join(target_base, "imagesTs")
     target_labelsTr = join(target_base, "labelsTr")
+    print("target_base", target_base)
+    print("target_imagesTr", target_imagesTr)
 
     maybe_mkdir_p(target_imagesTr)
     maybe_mkdir_p(target_imagesVal)
@@ -182,19 +190,31 @@ if __name__ == "__main__":
         [i.get() for i in results]
 
     json_dict = OrderedDict()
-    json_dict["name"] = "FLARE23TumorWithOAR"
+    json_dict["name"] = "FLARE23TumorMultiLabel"
     json_dict["description"] = "FLARE2023"
     json_dict["tensorImageSize"] = "4D"
     json_dict["reference"] = "see FLARE2023"
     json_dict["licence"] = "see FLARE2023 licence"
     json_dict["release"] = "0.0"
     json_dict["modality"] = {
-        "0": "CT",
-        "1": "seg"
+        "0": "CT"
     }
     json_dict["labels"] = {
         "0": "background",
-        "1": "tumor"
+        "1": "tumor_1",
+        "2": "tumor_2",
+        "3": "tumor_3",
+        "4": "tumor_4",
+        "5": "tumor_5",
+        "6": "tumor_6",
+        "7": "tumor_7",
+        "8": "tumor_8",
+        "9": "tumor_9",
+        "10": "tumor_10",
+        "11": "tumor_11",
+        "12": "tumor_12",
+        "13": "tumor_13",
+        "14": "tumor",
     }
     json_dict["numTraining"] = len(patient_names)
     json_dict["numTest"] = 0
@@ -203,12 +223,3 @@ if __name__ == "__main__":
     json_dict["test"] = []
 
     save_json(json_dict, os.path.join(target_base, "dataset.json"))
-
-    # val_pids = subfiles(val_image_dir, join=False)
-    # print(len(val_pids), val_pids[:10])
-    # for p in val_pids:
-    #     pid = p.split("_0000.nii.gz")[0]
-    #     ct = join(val_image_dir, p)
-    #     assert isfile(ct), "%s" % pid
-    #
-    #     shutil.copy(ct, join(target_imagesVal, p))

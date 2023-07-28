@@ -51,7 +51,7 @@ if __name__ == "__main__":
     label_dir = join(data_dir, "labelsTr2200")
     image_dir = join(data_dir, "imagesTr2200")
     val_image_dir = join(data_dir, "validation")
-    pid_table_path = "/home/zhongzhiqiang/PreResearch/FLARE2023/tables/labelsTr1497_fullTumor.xlsx"
+    pid_table_path = "/home/zhongzhiqiang/PreResearch/FLARE2023/tables/labelsTr222_fullTumor.xlsx"
 
     target_base = join(nnUNet_raw_data, task_name)
     target_imagesTr = join(target_base, "imagesTr")

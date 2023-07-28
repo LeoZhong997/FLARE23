@@ -18,10 +18,9 @@ import torch
 
 from nnunet.inference.predict import predict_from_folder
 from nnunet.paths import default_plans_identifier, network_training_output_dir, default_cascade_trainer, default_trainer
-from batchgenerators.utilities.file_and_folder_operations import join, isdir, save_json
+from batchgenerators.utilities.file_and_folder_operations import join, isdir
 from nnunet.utilities.task_name_id_conversion import convert_id_to_task_name
-from time import time
-
+import time
 
 def main():
     parser = argparse.ArgumentParser()
@@ -215,15 +214,15 @@ def main():
     print("using model stored in ", model_folder_name)
     assert isdir(model_folder_name), "model output folder not found. Expected: %s" % model_folder_name
 
-    st = time()
+    predict_start_time = time.time()
+
     predict_from_folder(model_folder_name, input_folder, output_folder, folds, save_npz, num_threads_preprocessing,
                         num_threads_nifti_save, lowres_segmentations, part_id, num_parts, not disable_tta,
                         overwrite_existing=overwrite_existing, mode=mode, overwrite_all_in_gpu=all_in_gpu,
                         mixed_precision=not args.disable_mixed_precision,
                         step_size=step_size, checkpoint_name=args.chk)
-    end = time()
-    save_json(end - st, join(output_folder, 'prediction_time.txt'))
-
+                        
+    print('Total predict time: ', time.time()-predict_start_time)
 
 if __name__ == "__main__":
     main()

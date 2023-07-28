@@ -296,7 +296,6 @@ class ExperimentPlanner(object):
         else:
             more = True
 
-        more = False
         if more:
             print("generating configuration for 3d_lowres")
             # if we are doing more than one stage then we want the lowest stage to have exactly
@@ -365,7 +364,7 @@ class ExperimentPlanner(object):
         for i in range(num_modalities):
             if modalities[i] == "CT" or modalities[i] == 'ct':
                 schemes[i] = "CT"
-            elif modalities[i] == 'noNorm' or modalities[i] == 'seg':
+            elif modalities[i] == 'noNorm':
                 schemes[i] = "noNorm"
             else:
                 schemes[i] = "nonCT"
@@ -389,7 +388,7 @@ class ExperimentPlanner(object):
         use_nonzero_mask_for_norm = OrderedDict()
 
         for i in range(num_modalities):
-            if "CT" in modalities[i] or "seg" in modalities[i]:
+            if "CT" in modalities[i]:
                 use_nonzero_mask_for_norm[i] = False
             else:
                 all_size_reductions = []

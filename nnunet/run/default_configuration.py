@@ -71,9 +71,6 @@ def get_default_configuration(network, task, network_trainer, plans_identifier=d
     if (network == '2d' or len(possible_stages) > 1) and not network == '3d_lowres':
         batch_dice = True
         print("I am using batch dice + CE loss")
-    elif network == '3d_fullres':
-        batch_dice = True
-        print("I am using batch dice + CE loss")
     else:
         batch_dice = False
         print("I am using sample dice + CE loss")
