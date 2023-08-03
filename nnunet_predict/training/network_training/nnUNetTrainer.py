@@ -485,7 +485,8 @@ class nnUNetTrainer(NetworkTrainer):
                                                          use_sliding_window: bool = True, step_size: float = 0.5,
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',
                                                          pad_kwargs: dict = None, all_in_gpu: bool = False,
-                                                         verbose: bool = True, mixed_precision: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+                                                         verbose: bool = True, mixed_precision: bool = True,
+                                                         window_type='fast') -> Tuple[np.ndarray, np.ndarray]:
         """
         :param data:
         :param do_mirroring:
@@ -519,7 +520,7 @@ class nnUNetTrainer(NetworkTrainer):
                                       patch_size=self.patch_size, regions_class_order=self.regions_class_order,
                                       use_gaussian=use_gaussian, pad_border_mode=pad_border_mode,
                                       pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu, verbose=verbose,
-                                      mixed_precision=mixed_precision)
+                                      mixed_precision=mixed_precision, window_type=window_type)
         self.network.train(current_mode)
         return ret
 

@@ -17,7 +17,7 @@ import argparse
 import os
 from copy import deepcopy
 from typing import Tuple, Union, List
-
+import glob
 import numpy as np
 from batchgenerators.augmentations.utils import resize_segmentation
 from nnunet.inference.segmentation_export import save_segmentation_nifti_from_softmax, save_segmentation_nifti
@@ -445,7 +445,8 @@ def predict_cases_fast(model, list_of_lists, output_filenames, folds, num_thread
 def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_threads_preprocessing,
                           num_threads_nifti_save, segs_from_prev_stage=None, do_tta=True, mixed_precision=True,
                           overwrite_existing=False, all_in_gpu=False, step_size=0.5,
-                          checkpoint_name="model_final_checkpoint", disable_postprocessing: bool = False):
+                          checkpoint_name="model_final_checkpoint", disable_postprocessing: bool = False, window_type: str = 'fast',
+                          preprocessing_folder=None):
     assert len(list_of_lists) == len(output_filenames)
     if segs_from_prev_stage is not None: assert len(segs_from_prev_stage) == len(output_filenames)
 
@@ -481,19 +482,32 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
                                                       checkpoint_name=checkpoint_name)
 
     print("starting preprocessing generator")
-    preprocessing = preprocess_multithreaded(trainer, list_of_lists, cleaned_output_files, num_threads_preprocessing,
+    if preprocessing_folder is not None:
+        preprocessing = glob.glob(preprocessing_folder + "/*.npy")
+        print(f"\033[91m {len(preprocessing)}\033[00m")
+    else:
+        preprocessing = preprocess_multithreaded(trainer, list_of_lists, cleaned_output_files, num_threads_preprocessing,
                                              segs_from_prev_stage)
 
     print("starting prediction...")
     for preprocessed in preprocessing:
-        print("getting data from preprocessor")
-        output_filename, (d, dct) = preprocessed
-        print("got something")
-        if isinstance(d, str):
-            print("what I got is a string, so I need to load a file")
-            data = np.load(d)
-            os.remove(d)
-            d = data
+        if preprocessing_folder is not None:
+            d = np.load(preprocessed)
+            output_filename = os.path.join(dr, os.path.basename(preprocessed).replace(".npy", ".nii.gz"))
+            print(f"\033[91m{output_filename}\033[00m")
+            f_read = open(preprocessed.replace('.npy', '.pkl'), 'rb')
+            dct = pickle.load(f_read)
+            print(dct)
+            f_read.close()
+        else:
+            print("getting data from preprocessor")
+            output_filename, (d, dct) = preprocessed
+            print("got something")
+            if isinstance(d, str):
+                print("what I got is a string, so I need to load a file")
+                data = np.load(d)
+                os.remove(d)
+                d = data
 
         # print(">>>d shape: ", d.shape)
         # save_path = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_temp/" + os.path.basename(output_filename)
@@ -514,8 +528,10 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
                                                                            mirror_axes=trainer.data_aug_params['mirror_axes'],
                                                                            use_sliding_window=True,
                                                                            step_size=step_size, use_gaussian=True,
+                                                                           # step_size=step_size, use_gaussian=False,
                                                                            all_in_gpu=all_in_gpu,
-                                                                           mixed_precision=mixed_precision)
+                                                                           mixed_precision=mixed_precision,
+                                                                           window_type=window_type)
             print(i, 'fold, ', 'GPU Inference Time: ', time.time()-start_gpu)
             print(i, 'fold, ', 'res: ', res[0].shape, res[1].shape)
             if len(params) > 1:
@@ -639,7 +655,8 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
                         part_id: int, num_parts: int, tta: bool, mixed_precision: bool = True,
                         overwrite_existing: bool = True, mode: str = 'normal', overwrite_all_in_gpu: bool = None,
                         step_size: float = 0.5, checkpoint_name: str = "model_final_checkpoint",
-                        segmentation_export_kwargs: dict = None, disable_postprocessing: bool = False):
+                        segmentation_export_kwargs: dict = None, disable_postprocessing: bool = False, window_type: str = 'fast',
+                        preprocessing_folder=None):
     """
         here we use the standard naming scheme to generate list_of_lists and output_files needed by predict_cases
 
@@ -720,7 +737,8 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
                                      tta, mixed_precision=mixed_precision, overwrite_existing=overwrite_existing,
                                      all_in_gpu=all_in_gpu,
                                      step_size=step_size, checkpoint_name=checkpoint_name,
-                                     disable_postprocessing=disable_postprocessing)
+                                     disable_postprocessing=disable_postprocessing, window_type=window_type,
+                                     preprocessing_folder=preprocessing_folder)
     else:
         raise ValueError("unrecognized mode. Must be normal, fast or fastest")
 
