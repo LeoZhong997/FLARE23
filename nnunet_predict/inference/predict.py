@@ -589,25 +589,35 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
     # now apply postprocessing
     # first load the postprocessing properties if they are present. Else raise a well visible warning
     
-    disable_postprocessing = True
+    # disable_postprocessing = True
     if not disable_postprocessing:
         results = []
-        pp_file = join(model, "postprocessing.json")
-        if isfile(pp_file):
-            print("postprocessing...")
-            shutil.copy(pp_file, os.path.dirname(output_filenames[0]))
-            # for_which_classes stores for which of the classes everything but the largest connected component needs to be
-            # removed
-            for_which_classes, min_valid_obj_size = load_postprocessing(pp_file)
-            results.append(pool.starmap_async(load_remove_save,
-                                              zip(output_filenames, output_filenames,
-                                                  [for_which_classes] * len(output_filenames),
-                                                  [min_valid_obj_size] * len(output_filenames))))
-            _ = [i.get() for i in results]
-        else:
-            print("WARNING! Cannot run postprocessing because the postprocessing file is missing. Make sure to run "
-                  "consolidate_folds in the output folder of the model first!\nThe folder you need to run this in is "
-                  "%s" % model)
+        # pp_file = join(model, "postprocessing.json")
+        # if isfile(pp_file):
+        #     print("postprocessing...")
+        #     shutil.copy(pp_file, os.path.dirname(output_filenames[0]))
+        #     # for_which_classes stores for which of the classes everything but the largest connected component needs to be
+        #     # removed
+        #     for_which_classes, min_valid_obj_size = load_postprocessing(pp_file)
+        #     results.append(pool.starmap_async(load_remove_save,
+        #                                       zip(output_filenames, output_filenames,
+        #                                           [for_which_classes] * len(output_filenames),
+        #                                           [min_valid_obj_size] * len(output_filenames))))
+        #     _ = [i.get() for i in results]
+        # else:
+        #     print("WARNING! Cannot run postprocessing because the postprocessing file is missing. Make sure to run "
+        #           "consolidate_folds in the output folder of the model first!\nThe folder you need to run this in is "
+        #           "%s" % model)
+
+        print("postprocessing...")
+        start_pp = time.time()
+        for_which_classes, min_valid_obj_size = [i for i in range(1, 14)], None
+        results.append(pool.starmap_async(load_remove_save,
+                                          zip(output_filenames, output_filenames,
+                                              [for_which_classes] * len(output_filenames),
+                                              [min_valid_obj_size] * len(output_filenames))))
+        _ = [i.get() for i in results]
+        print('postprocessing Time: ', time.time() - start_pp)
 
     pool.close()
     pool.join()
@@ -649,6 +659,23 @@ def check_input_folder_and_return_caseIDs(input_folder, expected_num_modalities)
     return maybe_case_ids
 
 
+def check_input_subfolder_and_return_caseIDs(input_folder, expected_num_modalities):
+    print("This model expects %d input modalities for each image" % expected_num_modalities)
+    all_nii_files = sorted(glob.glob(os.path.join(input_folder, "*", "*.nii.gz")))[:]
+    maybe_case_ids = [os.path.basename(p)[:-12] for p in all_nii_files]
+
+    assert len(all_nii_files) > 0, "input folder did not contain any images (expected to find .nii.gz file endings)"
+    assert len(all_nii_files) == len(np.unique(maybe_case_ids)), "ids must match files"
+
+    print("Found %d unique case ids, here are some examples:" % len(maybe_case_ids),
+          maybe_case_ids[:5], maybe_case_ids[-5:])
+    print("Found %d case files, here are some examples:" % len(all_nii_files),
+          all_nii_files[:5], all_nii_files[-5:])
+    print("If they don't look right, make sure to double check your filenames. They must end with _0000.nii.gz etc")
+
+    return maybe_case_ids, all_nii_files
+
+
 def predict_from_folder(model: str, input_folder: str, output_folder: str, folds: Union[Tuple[int], List[int]],
                         save_npz: bool, num_threads_preprocessing: int, num_threads_nifti_save: int,
                         lowres_segmentations: Union[str, None],
@@ -688,6 +715,9 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
     all_files = subfiles(input_folder, suffix=".nii.gz", join=False, sort=True)
     list_of_lists = [[join(input_folder, i) for i in all_files if i[:len(j)].startswith(j) and
                       len(i) == (len(j) + 12)] for j in case_ids]
+    # case_ids, all_files = check_input_subfolder_and_return_caseIDs(input_folder, expected_num_modalities)
+    # output_files = [join(output_folder, i + ".nii.gz") for i in case_ids]
+    # list_of_lists = [[p] for p in all_files]
 
     if lowres_segmentations is not None:
         assert isdir(lowres_segmentations), "if lowres_segmentations is not None then it must point to a directory"

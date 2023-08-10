@@ -629,12 +629,12 @@ class SegmentationNetwork(NeuralNetwork):
             lb_z = z
             ub_z = z + patch_size[0]
 
-            if len(steps[1]) == 0:
+            if len(steps[1]) == 1:
                 lb_y = 0
             else:
                 lb_y = steps[1][1]
             ub_y = lb_y + patch_size[1]
-            if len(steps[2]) == 0:
+            if len(steps[2]) == 1:
                 lb_x = 0
             else:
                 lb_x = steps[2][1]
@@ -806,54 +806,67 @@ class SegmentationNetwork(NeuralNetwork):
             mirror_idx = 1
             num_results = 1
 
-        # x -> torch.Size([1, 1, 32, 128, 192]), torch.float32, [2, 3, 4] are index of z, y, x-axis
-        # partial tta for batch inference
-        # tta_batch_data = torch.concat((x, torch.flip(x, (4,)), torch.flip(x, (3,)), torch.flip(x, (2,)),
-        #                                torch.flip(x, (4, 3)), torch.flip(x, (4, 2)), torch.flip(x, (3, 2)),
-        #                                torch.flip(x, (4, 3, 2))
-        #                                ), dim=0)
-        # tta_batch_pred = self.inference_apply_nonlin(self(tta_batch_data))
-        # tta_batch_pred[1:2] = torch.flip(tta_batch_pred[1:2], (4,))
-        # tta_batch_pred[2:3] = torch.flip(tta_batch_pred[2:3], (3,))
-        # tta_batch_pred[3:4] = torch.flip(tta_batch_pred[3:4], (2,))
-        # tta_batch_pred[4:5] = torch.flip(tta_batch_pred[4:5], (4, 3))
-        # tta_batch_pred[5:6] = torch.flip(tta_batch_pred[5:6], (4, 2))
-        # tta_batch_pred[6:7] = torch.flip(tta_batch_pred[6:7], (3, 2))
-        # tta_batch_pred[7:8] = torch.flip(tta_batch_pred[7:8], (4, 3, 2))
-        # result_torch = torch.mean(tta_batch_pred, dim=0, keepdim=True)
+        batchTTA = False
+        TTA4 = True
+        print(">>>Debug _internal_maybe_mirror_and_pred_3D TTA4, batchTTA, mirror_idx: ", TTA4, batchTTA, mirror_idx)
+        if batchTTA:
+            # x -> torch.Size([1, 1, 32, 128, 192]), torch.float32, [2, 3, 4] are index of z, y, x-axis
+            # partial tta for batch inference
+            tta_batch_data = torch.concat((x, torch.flip(x, (4,)), torch.flip(x, (3,)), torch.flip(x, (2,)),
+                                           # torch.flip(x, (4, 3)), torch.flip(x, (4, 2)), torch.flip(x, (3, 2)),
+                                           # torch.flip(x, (4, 3, 2))
+                                           ), dim=0)
+            tta_batch_pred = self.inference_apply_nonlin(self(tta_batch_data))
+            tta_batch_pred[1:2] = torch.flip(tta_batch_pred[1:2], (4,))
+            tta_batch_pred[2:3] = torch.flip(tta_batch_pred[2:3], (3,))
+            tta_batch_pred[3:4] = torch.flip(tta_batch_pred[3:4], (2,))
+            # tta_batch_pred[4:5] = torch.flip(tta_batch_pred[4:5], (4, 3))
+            # tta_batch_pred[5:6] = torch.flip(tta_batch_pred[5:6], (4, 2))
+            # tta_batch_pred[6:7] = torch.flip(tta_batch_pred[6:7], (3, 2))
+            # tta_batch_pred[7:8] = torch.flip(tta_batch_pred[7:8], (4, 3, 2))
+            result_torch = torch.mean(tta_batch_pred, dim=0, keepdim=True)
+        elif TTA4:
+            pred = self.inference_apply_nonlin(self(x))
+            result_torch += 1 / num_results * pred
+            pred = self.inference_apply_nonlin(self(torch.flip(x, (4,))))
+            result_torch += 1 / num_results * torch.flip(pred, (4,))
+            pred = self.inference_apply_nonlin(self(torch.flip(x, (3,))))
+            result_torch += 1 / num_results * torch.flip(pred, (3,))
+            pred = self.inference_apply_nonlin(self(torch.flip(x, (2,))))
+            result_torch += 1 / num_results * torch.flip(pred, (2,))
+        else:
+            for m in range(mirror_idx):
+                if m == 0:
+                    pred = self.inference_apply_nonlin(self(x))
+                    result_torch += 1 / num_results * pred
 
-        for m in range(mirror_idx):
-            if m == 0:
-                pred = self.inference_apply_nonlin(self(x))
-                result_torch += 1 / num_results * pred
+                if m == 1 and (2 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4,))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4,))
 
-            if m == 1 and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4,))))
-                result_torch += 1 / num_results * torch.flip(pred, (4,))
+                if m == 2 and (1 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (3,))))
+                    result_torch += 1 / num_results * torch.flip(pred, (3,))
 
-            if m == 2 and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (3,))))
-                result_torch += 1 / num_results * torch.flip(pred, (3,))
+                if m == 3 and (2 in mirror_axes) and (1 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4, 3))
 
-            if m == 3 and (2 in mirror_axes) and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3))))
-                result_torch += 1 / num_results * torch.flip(pred, (4, 3))
+                if m == 4 and (0 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (2,))))
+                    result_torch += 1 / num_results * torch.flip(pred, (2,))
 
-            if m == 4 and (0 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (2,))))
-                result_torch += 1 / num_results * torch.flip(pred, (2,))
+                if m == 5 and (0 in mirror_axes) and (2 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 2))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4, 2))
 
-            if m == 5 and (0 in mirror_axes) and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 2))))
-                result_torch += 1 / num_results * torch.flip(pred, (4, 2))
+                if m == 6 and (0 in mirror_axes) and (1 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (3, 2))))
+                    result_torch += 1 / num_results * torch.flip(pred, (3, 2))
 
-            if m == 6 and (0 in mirror_axes) and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (3, 2))))
-                result_torch += 1 / num_results * torch.flip(pred, (3, 2))
-
-            if m == 7 and (0 in mirror_axes) and (1 in mirror_axes) and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3, 2))))
-                result_torch += 1 / num_results * torch.flip(pred, (4, 3, 2))
+                if m == 7 and (0 in mirror_axes) and (1 in mirror_axes) and (2 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3, 2))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4, 3, 2))
 
         if mult is not None:
             result_torch[:, :] *= mult
