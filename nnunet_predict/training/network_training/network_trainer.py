@@ -77,6 +77,11 @@ class NetworkTrainer(object):
         self.tr_gen = self.val_gen = None
         self.was_initialized = False
 
+        ################# SET THESE IN self.initialize() ###################################
+        self.trt_path = ""
+        self.trt_mode = False
+        self.trt_session = None
+
         ################# SET THESE IN INIT ################################################
         self.output_folder = None
         self.fold = None

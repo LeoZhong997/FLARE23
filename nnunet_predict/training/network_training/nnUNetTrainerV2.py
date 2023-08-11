@@ -52,7 +52,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
         self.pin_memory = True
 
-    def initialize(self, training=True, force_load_plans=False):
+    def initialize(self, training=True, force_load_plans=False, trt_mode=False, trt_path=""):
         """
         - replaced get_default_augmentation with get_moreDA_augmentation
         - enforce to only run this code once
@@ -118,10 +118,15 @@ class nnUNetTrainerV2(nnUNetTrainer):
             else:
                 pass
 
-            self.initialize_network()
-            self.initialize_optimizer_and_scheduler()
+            if trt_mode:
+                self.trt_path = trt_path
+                self.trt_mode = trt_mode
+                self.load_trt_engine()
+            else:
+                self.initialize_network()
+                self.initialize_optimizer_and_scheduler()
 
-            assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
+                assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
         else:
             self.print_to_log_file('self.was_initialized is True, not running self.initialize again')
         self.was_initialized = True
@@ -203,23 +208,37 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',
                                                          pad_kwargs: dict = None, all_in_gpu: bool = False,
                                                          verbose: bool = True, mixed_precision=True,
-                                                         window_type='fast') -> Tuple[np.ndarray, np.ndarray]:
+                                                         window_type='fast', trt_mode=False) -> Tuple[np.ndarray, np.ndarray]:
         """
         We need to wrap this because we need to enforce self.network.do_ds = False for prediction
         """
-        ds = self.network.do_ds
-        self.network.do_ds = False
-        ret = super().predict_preprocessed_data_return_seg_and_softmax(data,
-                                                                       do_mirroring=do_mirroring,
-                                                                       mirror_axes=mirror_axes,
-                                                                       use_sliding_window=use_sliding_window,
-                                                                       step_size=step_size, use_gaussian=use_gaussian,
-                                                                       pad_border_mode=pad_border_mode,
-                                                                       pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
-                                                                       verbose=verbose,
-                                                                       mixed_precision=mixed_precision,
-                                                                       window_type=window_type)
-        self.network.do_ds = ds
+        if trt_mode:
+            ret = super().predict_preprocessed_data_return_seg_and_softmax(data,
+                                                                           do_mirroring=do_mirroring,
+                                                                           mirror_axes=mirror_axes,
+                                                                           use_sliding_window=use_sliding_window,
+                                                                           step_size=step_size,
+                                                                           use_gaussian=use_gaussian,
+                                                                           pad_border_mode=pad_border_mode,
+                                                                           pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
+                                                                           verbose=verbose,
+                                                                           mixed_precision=mixed_precision,
+                                                                           window_type=window_type,
+                                                                           trt_mode=trt_mode)
+        else:
+            ds = self.network.do_ds
+            self.network.do_ds = False
+            ret = super().predict_preprocessed_data_return_seg_and_softmax(data,
+                                                                           do_mirroring=do_mirroring,
+                                                                           mirror_axes=mirror_axes,
+                                                                           use_sliding_window=use_sliding_window,
+                                                                           step_size=step_size, use_gaussian=use_gaussian,
+                                                                           pad_border_mode=pad_border_mode,
+                                                                           pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
+                                                                           verbose=verbose,
+                                                                           mixed_precision=mixed_precision,
+                                                                           window_type=window_type)
+            self.network.do_ds = ds
         return ret
 
     def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False):

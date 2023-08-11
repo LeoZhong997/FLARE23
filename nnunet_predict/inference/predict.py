@@ -446,7 +446,7 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
                           num_threads_nifti_save, segs_from_prev_stage=None, do_tta=True, mixed_precision=True,
                           overwrite_existing=False, all_in_gpu=False, step_size=0.5,
                           checkpoint_name="model_final_checkpoint", disable_postprocessing: bool = False, window_type: str = 'fast',
-                          preprocessing_folder=None):
+                          preprocessing_folder=None, trt_mode=False):
     assert len(list_of_lists) == len(output_filenames)
     if segs_from_prev_stage is not None: assert len(segs_from_prev_stage) == len(output_filenames)
 
@@ -479,7 +479,7 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
 
     print("loading parameters for folds,", folds)
     trainer, params = load_model_and_checkpoint_files(model, folds, mixed_precision=mixed_precision,
-                                                      checkpoint_name=checkpoint_name)
+                                                      checkpoint_name=checkpoint_name, trt_mode=trt_mode)
 
     print("starting preprocessing generator")
     if preprocessing_folder is not None:
@@ -521,23 +521,40 @@ def predict_cases_fastest(model, list_of_lists, output_filenames, folds, num_thr
         all_seg_outputs = np.zeros((len(params), *d.shape[1:]), dtype=int)
         print("predicting", output_filename)
 
-        for i, p in enumerate(params):
-            trainer.load_checkpoint_ram(p, False)
+        if trt_mode:
             start_gpu = time.time()
             res = trainer.predict_preprocessed_data_return_seg_and_softmax(d, do_mirroring=do_tta,
-                                                                           mirror_axes=trainer.data_aug_params['mirror_axes'],
+                                                                           mirror_axes=trainer.data_aug_params[
+                                                                               'mirror_axes'],
                                                                            use_sliding_window=True,
                                                                            step_size=step_size, use_gaussian=True,
                                                                            # step_size=step_size, use_gaussian=False,
                                                                            all_in_gpu=all_in_gpu,
                                                                            mixed_precision=mixed_precision,
-                                                                           window_type=window_type)
-            print(i, 'fold, ', 'GPU Inference Time: ', time.time()-start_gpu)
-            print(i, 'fold, ', 'res: ', res[0].shape, res[1].shape)
-            if len(params) > 1:
-                # otherwise we dont need this and we can save ourselves the time it takes to copy that
-                all_softmax_outputs[i] = res[1]
-            all_seg_outputs[i] = res[0]
+                                                                           window_type=window_type,
+                                                                           trt_mode=trt_mode)
+            print('GPU Inference Time: ', time.time() - start_gpu)
+            print('res: ', res[0].shape, res[1].shape)
+            all_softmax_outputs[0] = res[1]
+            all_seg_outputs[0] = res[0]
+        else:
+            for i, p in enumerate(params):
+                trainer.load_checkpoint_ram(p, False)
+                start_gpu = time.time()
+                res = trainer.predict_preprocessed_data_return_seg_and_softmax(d, do_mirroring=do_tta,
+                                                                               mirror_axes=trainer.data_aug_params['mirror_axes'],
+                                                                               use_sliding_window=True,
+                                                                               step_size=step_size, use_gaussian=True,
+                                                                               # step_size=step_size, use_gaussian=False,
+                                                                               all_in_gpu=all_in_gpu,
+                                                                               mixed_precision=mixed_precision,
+                                                                               window_type=window_type)
+                print(i, 'fold, ', 'GPU Inference Time: ', time.time()-start_gpu)
+                print(i, 'fold, ', 'res: ', res[0].shape, res[1].shape)
+                if len(params) > 1:
+                    # otherwise we dont need this and we can save ourselves the time it takes to copy that
+                    all_softmax_outputs[i] = res[1]
+                all_seg_outputs[i] = res[0]
 
         if hasattr(trainer, 'regions_class_order'):
             region_class_order = trainer.regions_class_order
@@ -683,7 +700,7 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
                         overwrite_existing: bool = True, mode: str = 'normal', overwrite_all_in_gpu: bool = None,
                         step_size: float = 0.5, checkpoint_name: str = "model_final_checkpoint",
                         segmentation_export_kwargs: dict = None, disable_postprocessing: bool = False, window_type: str = 'fast',
-                        preprocessing_folder=None):
+                        preprocessing_folder=None, trt_mode=False):
     """
         here we use the standard naming scheme to generate list_of_lists and output_files needed by predict_cases
 
@@ -768,7 +785,7 @@ def predict_from_folder(model: str, input_folder: str, output_folder: str, folds
                                      all_in_gpu=all_in_gpu,
                                      step_size=step_size, checkpoint_name=checkpoint_name,
                                      disable_postprocessing=disable_postprocessing, window_type=window_type,
-                                     preprocessing_folder=preprocessing_folder)
+                                     preprocessing_folder=preprocessing_folder, trt_mode=trt_mode)
     else:
         raise ValueError("unrecognized mode. Must be normal, fast or fastest")
 

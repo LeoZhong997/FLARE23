@@ -104,6 +104,8 @@ def main():
     
     parser.add_argument("--disable_postprocessing", required=False, default=False, action="store_true",help="set this flag to disable postprocessing.")
 
+    parser.add_argument("--do_trt", required=False, default=False, action="store_true",help="set this flag to disable postprocessing.")
+
     parser.add_argument("--overwrite_existing", required=False, default=False, action="store_true",
                         help="Set this flag if the target folder contains predictions that you would like to overwrite")
 
@@ -153,6 +155,7 @@ def main():
     task_name = args.task_name
     window_type = args.slicing_window
     disable_postprocessing = args.disable_postprocessing
+    trt_mode = args.do_trt
     if not task_name.startswith("Task"):
         task_id = int(task_name)
         task_name = convert_id_to_task_name(task_id)
@@ -228,7 +231,7 @@ def main():
                         overwrite_existing=overwrite_existing, mode=mode, overwrite_all_in_gpu=all_in_gpu,
                         mixed_precision=not args.disable_mixed_precision,
                         step_size=step_size, checkpoint_name=args.chk, disable_postprocessing=disable_postprocessing,
-                        window_type=window_type, preprocessing_folder=preprocessing_folder)
+                        window_type=window_type, preprocessing_folder=preprocessing_folder, trt_mode=trt_mode)
                         
     print('Total predict time: ', time.time()-predict_start_time)
 
