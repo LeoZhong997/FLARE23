@@ -236,8 +236,10 @@ class nnUNetTrainer(NetworkTrainer):
         self.was_initialized = True
 
     def load_trt_engine(self):
-        from nnunet.utilities.trt_utils import TensorRTSession
-        self.trt_session = TensorRTSession(self.trt_path, self.num_classes)
+        # from nnunet.utilities.trt_utils import TensorRTSession
+        # self.trt_session = TensorRTSession(self.trt_path, self.num_classes)
+        from nnunet.utilities.trt_utils import TRTModule
+        self.trt_session = TRTModule(self.trt_path, self.num_classes)
 
     def initialize_network(self):
         """

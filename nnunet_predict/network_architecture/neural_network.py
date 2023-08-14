@@ -808,7 +808,7 @@ class SegmentationNetwork(NeuralNetwork):
 
         batchTTA = False
         TTA4 = True
-        print(">>>Debug _internal_maybe_mirror_and_pred_3D TTA4, batchTTA, mirror_idx: ", TTA4, batchTTA, mirror_idx)
+        print(">>>Debug SegmentationNetwork _internal_maybe_mirror_and_pred_3D TTA4, batchTTA, mirror_idx: ", TTA4, batchTTA, mirror_idx)
         if batchTTA:
             # x -> torch.Size([1, 1, 32, 128, 192]), torch.float32, [2, 3, 4] are index of z, y, x-axis
             # partial tta for batch inference
