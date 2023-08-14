@@ -1,14 +1,19 @@
 import glob
 import os
 import shutil
+from collections import OrderedDict
+
 import SimpleITK as sitk
 import numpy as np
 import pandas as pd
 
 from batchgenerators.utilities.file_and_folder_operations import *
+from scipy.ndimage import gaussian_filter
 
 from nnunet.evaluation.metrics import dice
 from nnunet.network_architecture.neural_network import SegmentationNetwork
+from utilities.SurfaceAndDice import compute_dice_coefficient, compute_surface_distances, \
+    compute_surface_dice_at_tolerance
 from utils import small_volume_filter_2d
 
 cls_oar = ["Background", "Liver", "Right kidney", "Spleen", "Pancreas", "Aorta", "Inferior vena cava",
@@ -57,23 +62,54 @@ def merge_oar_tumor_label(oar_re_dir, tumor_re_dir, result_dir):
         # break
 
 
+def compare_nnUNet_output(re1, re2):
+    pid = "Test"
+    class_id = range(1, 15)
+    re1_zero_num, re2_zero_num = [0] * len(class_id), [0] * len(class_id)
+    re1_img = sitk.ReadImage(re1)
+    re1_npy = sitk.GetArrayFromImage(re1_img).astype(np.uint8)
+    re2_img = sitk.ReadImage(re2)
+    re2_npy = sitk.GetArrayFromImage(re2_img).astype(np.uint8)
+
+    assert re1_npy.shape == re2_npy.shape, f"{pid} shape dont match"
+
+    metric = {}
+    for i, c in enumerate(class_id):
+        re1_npy_c = re1_npy * 0
+        re1_npy_c[re1_npy == c] = 1
+        re2_npy_c = re2_npy * 0
+        re2_npy_c[re2_npy == c] = 1
+        re1_num, re2_num = np.sum(re1_npy_c), np.sum(re2_npy_c)
+        if re1_num != 0:
+            re1_zero_num[i] += 1
+        if re2_num != 0:
+            re2_zero_num[i] += 1
+        dsc = dice(re1_npy_c, re2_npy_c)
+        dsc = round(dsc, 4)
+        print(pid, i, c, re1_num, re2_num, dsc)
+        metric[f"re1_pixel{c}"] = re1_num
+        metric[f"re2_pixel{c}"] = re2_num
+        metric[f"dice{c}"] = dsc
+    print(metric)
+
+
 def compare_nnUNet_outputs(r1_dir, r2_dir, folds=None, save_table=False, rename=None,
                            match_img_label=False, img_dir=None, save_dir=None, pid_list=None,
                            class_id=None):
     if rename is None:
         rename = ["re1", "re2"]
     if folds is None:
-        folds = []
+        folds = [""]
     if class_id is None:
         class_id = [1]
     if match_img_label and img_dir is None:
         # this img folder copied from ori image directly
         img_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task023_FLARE23Tumor/imagesTr"
-    if save_dir is None:
-        save_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_dataset/compare_result/" + \
-                   os.path.basename(r1_dir)
-    maybe_mkdir_p(save_dir)
-    table_path = os.path.join(save_dir, "dice_compare.xlsx")
+    if save_dir is not None:
+        # save_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_dataset/compare_result/" + \
+        #            os.path.basename(r1_dir)
+        maybe_mkdir_p(save_dir)
+        table_path = os.path.join(save_dir, "dice_compare.xlsx")
     if pid_list is None:
         pid_list = sorted(glob.glob(os.path.join(r1_dir, "*.nii.gz")))
         pid_list = [os.path.basename(p).split(".nii.gz")[0] for p in pid_list]
@@ -125,7 +161,7 @@ def compare_nnUNet_outputs(r1_dir, r2_dir, folds=None, save_table=False, rename=
 
         for i, f in enumerate(folds):
             re1 = os.path.join(r1_dir, pid + ".nii.gz")
-            re2 = os.path.join(r2_dir + f"_fold{f}", pid + ".nii.gz")
+            re2 = os.path.join(r2_dir + f"{f}", pid + ".nii.gz")
             re1_img = sitk.ReadImage(re1)
             re1_npy = sitk.GetArrayFromImage(re1_img)
             re2_img = sitk.ReadImage(re2)
@@ -156,7 +192,7 @@ def compare_val_results(r1_dir, r2_dir, save_table=False, rename=None,
         # this img folder copied from ori image directly
         img_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task023_FLARE23Tumor/imagesVal"
     if save_dir is None:
-        save_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/merge/compare_result/" + \
+        save_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Val50/" + \
                    os.path.basename(r1_dir) + f"-{rename[1]}"
     maybe_mkdir_p(save_dir)
     table_path = os.path.join(save_dir, "dice_compare.xlsx")
@@ -178,8 +214,8 @@ def compare_val_results(r1_dir, r2_dir, save_table=False, rename=None,
         re2_npy = sitk.GetArrayFromImage(re2_img).astype(np.uint8)
 
         # just check tumor
-        re2_npy[re2_npy > 0] = 14
-        re1_npy[re1_npy != 14] = 0
+        # re2_npy[re2_npy > 0] = 14
+        # re1_npy[re1_npy != 14] = 0
 
         assert re1_npy.shape == re2_npy.shape, f"{pid} shape dont match"
 
@@ -217,6 +253,135 @@ def compare_val_results(r1_dir, r2_dir, save_table=False, rename=None,
     if save_table:
         df = pd.DataFrame.from_dict(pid_metric_dict, orient="index")
         df.to_excel(table_path)
+
+
+def compare_val_results_flare23(r1_dir, r2_dir, save_table=False, rename=None,
+                                match_img_label=False, img_dir=None, save_dir=None, pid_list=None,
+                                class_id=None):
+    def find_lower_upper_zbound(organ_mask):
+        """
+        Parameters
+        ----------
+        seg : TYPE
+            DESCRIPTION.
+        Returns
+        -------
+        z_lower: lower bound in z axis: int
+        z_upper: upper bound in z axis: int
+        """
+        organ_mask = np.uint8(organ_mask)
+        assert np.max(organ_mask) ==1, print('mask label error!')
+        z_index = np.where(organ_mask>0)[2]
+        z_lower = np.min(z_index)
+        z_upper = np.max(z_index)
+
+        return z_lower, z_upper
+
+    if rename is None:
+        rename = ["re1", "re2"]
+    if class_id is None:
+        class_id = [i for i in range(1, 15)]
+    if match_img_label and img_dir is None:
+        # this img folder copied from ori image directly
+        img_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task023_FLARE23Tumor/imagesVal"
+    if save_dir is None:
+        save_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Val50/" + \
+                   os.path.basename(r1_dir) + f"-{rename[1]}"
+    maybe_mkdir_p(save_dir)
+    table_path = os.path.join(save_dir, "dice_nsd_metric.xlsx")
+    if pid_list is None:
+        pid_list = sorted(glob.glob(os.path.join(r1_dir, "*.nii.gz")))
+        pid_list = [os.path.basename(p).split(".nii.gz")[0] for p in pid_list]
+        pid_list = pid_list[:]
+    print(len(pid_list), pid_list[:5])
+
+    # flare metrics
+    seg_metrics = OrderedDict()
+    seg_metrics['Name'] = list()
+    label_tolerance = OrderedDict({'Liver': 5, 'RK':3, 'Spleen':3, 'Pancreas':5,
+                       'Aorta': 2, 'IVC':2, 'RAG':2, 'LAG':2, 'Gallbladder': 2,
+                       'Esophagus':3, 'Stomach': 5, 'Duodenum': 7, 'LK':3, 'Tumor':2})
+    for organ in label_tolerance.keys():
+        seg_metrics['{}_DSC'.format(organ)] = list()
+    for organ in label_tolerance.keys():
+        seg_metrics['{}_NSD'.format(organ)] = list()
+
+    pid_metric_dict = {}
+    for i, pid in enumerate(pid_list):
+        print(i, pid)
+        re1 = os.path.join(r1_dir, pid + ".nii.gz")
+        re2 = os.path.join(r2_dir, pid + ".nii.gz")
+        re1_img = sitk.ReadImage(re1)
+        re1_npy = sitk.GetArrayFromImage(re1_img).astype(np.uint8)
+        voxel_spacing = re1_img.GetSpacing()
+        re2_img = sitk.ReadImage(re2)
+        re2_npy = sitk.GetArrayFromImage(re2_img).astype(np.uint8)
+
+        assert re1_npy.shape == re2_npy.shape, f"{pid} shape dont match"
+
+        # flare metrics
+        seg_metrics['Name'].append(pid)
+        metric = {}
+        for i, organ in enumerate(label_tolerance.keys(), 1):
+            if np.sum(re1_npy == i) == 0 and np.sum(re2_npy == i) == 0:
+                DSC_i = 1
+                NSD_i = 1
+            elif np.sum(re1_npy == i) == 0 and np.sum(re2_npy == i) > 0:
+                DSC_i = 0
+                NSD_i = 0
+            elif np.sum(re1_npy == i) > 0 and np.sum(re2_npy == i) == 0:
+                DSC_i = 0
+                NSD_i = 0
+            else:
+                if i == 5 or i == 6 or i == 10:  # for Aorta, IVC, and Esophagus, only evaluate the labelled slices in ground truth
+                    z_lower, z_upper = find_lower_upper_zbound(re1_npy == i)
+                    organ_i_gt, organ_i_seg = re1_npy[:, :, z_lower:z_upper] == i, re2_npy[:, :, z_lower:z_upper] == i
+                else:
+                    organ_i_gt, organ_i_seg = re1_npy == i, re2_npy == i
+                DSC_i = compute_dice_coefficient(organ_i_gt, organ_i_seg)
+                if DSC_i < 0.1:
+                    NSD_i = 0
+                else:
+                    surface_distances = compute_surface_distances(organ_i_gt, organ_i_seg, voxel_spacing)
+                    NSD_i = compute_surface_dice_at_tolerance(surface_distances, label_tolerance[organ])
+            seg_metrics['{}_DSC'.format(organ)].append(round(DSC_i, 4))
+            seg_metrics['{}_NSD'.format(organ)].append(round(NSD_i, 4))
+            metric['{}_DSC'.format(organ)] = round(DSC_i, 4)
+            metric['{}_NSD'.format(organ)] = round(NSD_i, 4)
+            print(pid, organ, round(DSC_i, 4), 'tol:', label_tolerance[organ], round(NSD_i, 4))
+        pid_metric_dict[pid] = metric
+
+    overall_metrics = {}
+    for key, value in seg_metrics.items():
+        if 'Name' not in key:
+            overall_metrics[key] = round(np.mean(value), 4)
+
+    organ_dsc = []
+    organ_nsd = []
+    for key, value in overall_metrics.items():
+        if 'Tumor' not in key:
+            if 'DSC' in key:
+                organ_dsc.append(value)
+            if 'NSD' in key:
+                organ_nsd.append(value)
+    overall_metrics['Organ_DSC'] = round(np.mean(organ_dsc), 4)
+    overall_metrics['Organ_NSD'] = round(np.mean(organ_nsd), 4)
+
+    print("Computed metrics:")
+    for key, value in overall_metrics.items():
+        print("{}: {:.4f}".format(key, float(value)))
+
+    # Write metrics to file.
+    output_filename = os.path.join(save_dir, 'scores.txt')
+    output_file = open(output_filename, 'w')
+    for key, value in overall_metrics.items():
+        output_file.write("{}: {:.4f}\n".format(key, float(value)))
+    output_file.close()
+    print("metric: ", pid_metric_dict)
+    if save_table:
+        df = pd.DataFrame.from_dict(pid_metric_dict, orient="index")
+        df.to_excel(table_path)
+
 
 
 def modify_batch_size_in_plan(plan_file: str, batch_size: int, back_up=True):
@@ -367,7 +532,7 @@ def copy_images_with_unlabeled_tumor():
 
 def copy_checkpoint_from_temp_to_final():
     base_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_trained_models/nnUNet/3d_fullres/" \
-               "Task028_FLARE23TumorMultiLabelWithOAR/nnUNetTrainerV2_FLARE_Medium__nnUNetPlansFLARE23TumorMedium"
+               "Task030_FLARE23OARTumorMultiLabel/nnUNetTrainerV2_FLARE_Medium__nnUNetPlansFLARE23TumorMedium"
     # folds = [f"fold_{i}" for i in range(5)]
     folds = ["all"]
     overwrite = True
@@ -412,7 +577,7 @@ def compute_slide_window_mask():
     data_dir = "/data/result/herongxuan/dataset/Release"
     label_dir = join(data_dir, "labelsTr2200")
     cropped_label_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_preprocessed/" \
-                        "Task026_FLARE23TumorMultiLabel/nnUNetData_plans_FLARE23TumorMedium_stage0"     # tumor multi label
+                        "Task026_FLARE23TumorMultiLabel/nnUNetData_plans_FLARE23TumorMedium_stage0"  # tumor multi label
     image_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task023_FLARE23Tumor/imagesTr"
     maybe_mkdir_p(temp_dir)
 
@@ -461,7 +626,8 @@ def compute_slide_window_mask():
                 for x in steps[2]:
                     lb_x = x
                     ub_x = min(x + patch_size[2], img_size[2])
-                    window_mask[lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += patch_mask[0:ub_z-lb_z, 0:ub_y-lb_y, 0:ub_x-lb_x]
+                    window_mask[lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += patch_mask[0:ub_z - lb_z, 0:ub_y - lb_y,
+                                                                    0:ub_x - lb_x]
                     # print(">>>Debug: ", lb_z, ub_z, lb_y, ub_y, lb_x, ub_x)
 
         # print(np.max(window_mask), np.sum(window_mask == 0), np.sum(window_mask > 0))
@@ -491,13 +657,13 @@ def compute_slide_window_mask():
 
 
 def create_pseudo_tumor_use_oar_label():
-    img_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_inputs/imagesUnlabeledTumor/imagesTr"
+    img_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_inputs/imagesUnlabeledTumor/imagesTr_703"
     oar_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_inputs/imagesUnlabeledTumor/oarLabelsTr"
     tumor_result_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_inputs/imagesUnlabeledTumor/" \
-                       "Task026_all_do_mirror_fullWindow_closeTTA_0727"
+                       "Task026_all_do_mirror_fullWindow_0802"
     tumor_final_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_inputs/imagesUnlabeledTumor/pseudoLabelsTr"
     table_save_path = os.path.join("/data/result/zhongzhiqiang/nnUNet/nnUNet_inputs/imagesUnlabeledTumor",
-                                   "pseudo_tumor_info-Task026_all_do_mirror_fullWindow_closeTTA_0727.xlsx")
+                                   "pseudo_tumor_info-Task026_all_do_mirror_fullWindow_0802.xlsx")
 
     pid_list = sorted(glob.glob(os.path.join(img_dir, "*.nii.gz")))
     pid_list = [os.path.basename(p).split("_0000.nii.gz")[0] for p in pid_list][:]
@@ -572,6 +738,52 @@ def create_pseudo_tumor_use_oar_label():
     df.to_excel(table_save_path)
 
 
+def get_gaussian(patch_size, sigma_scale=1. / 8) -> np.ndarray:
+    save_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/predict_temp/gaussian_test"
+
+    tmp = np.zeros(patch_size)
+    center_coords = [i // 2 for i in patch_size]
+    sigmas = [i * sigma_scale for i in patch_size]
+    tmp[tuple(center_coords)] = 1
+    sitk.WriteImage(sitk.GetImageFromArray(tmp), os.path.join(save_dir, "tmp.nii.gz"))
+    gaussian_importance_map = gaussian_filter(tmp, sigmas, 0, mode='constant', cval=0)
+    sitk.WriteImage(sitk.GetImageFromArray(gaussian_importance_map),
+                    os.path.join(save_dir, "gaussian_importance_map1.nii.gz"))
+    gaussian_importance_map = gaussian_importance_map / np.max(gaussian_importance_map) * 1
+    sitk.WriteImage(sitk.GetImageFromArray(gaussian_importance_map),
+                    os.path.join(save_dir, "gaussian_importance_map2.nii.gz"))
+    gaussian_importance_map = gaussian_importance_map.astype(np.float32)
+
+    # gaussian_importance_map cannot be 0, otherwise we may end up with nans!
+    gaussian_importance_map[gaussian_importance_map == 0] = np.min(
+        gaussian_importance_map[gaussian_importance_map != 0])
+    sitk.WriteImage(sitk.GetImageFromArray(gaussian_importance_map),
+                    os.path.join(save_dir, "gaussian_importance_map3.nii.gz"))
+
+    return gaussian_importance_map
+
+
+def rename_files():
+    input_folder = "/data/result/herongxuan/dataset/Release/imagesTr2200"
+    base_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_dataset"
+    all_nii_files = sorted(glob.glob(os.path.join(input_folder, "*", "*.nii.gz")))[:]
+    maybe_case_ids = sorted([os.path.basename(p)[:-12] for p in all_nii_files])
+    for i, pid_saved in enumerate(maybe_case_ids):
+        file_path = all_nii_files[i]
+        pid_pred = os.path.basename(file_path)[:-12]
+        if pid_saved != pid_pred:
+            print("!!!wrong", pid_saved, pid_pred)
+        wrong_path = os.path.join(base_dir,
+                                  "Task030__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_TTA4_0807",
+                                  pid_saved + ".nii.gz")
+        correct_path = os.path.join(base_dir,
+                                    "Task030__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_TTA4_0808",
+                                    pid_pred + ".nii.gz")
+        shutil.copy(wrong_path, correct_path)
+
+    print(len(all_nii_files), len(maybe_case_ids))
+
+
 if __name__ == "__main__":
     # base_dir = "/data/result/zhongzhiqiang/nnUNet/nnUNet_preprocessed/"
     # task_name = "Task023_FLARE23Tumor"
@@ -581,17 +793,17 @@ if __name__ == "__main__":
     # nnUNetPlansFLARE23TumorSmall__5folds_noMirror_0713
     # nnUNetPlansFLARE23TumorSmall__all_do_mirror_0713
     # nnUNetPlansFLARE23TumorSmall__5folds_do_mirror_0713
-    # compare_nnUNet_outputs(
-    #     r1_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Task026__nnUNetPlansFLARE23TumorMedium__all_do_mirror_0724",
-    #     r2_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Task026__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_closeTTA_0724",
-    #     # folds=[i for i in range(5)]
+    # compare_nnUNet_output(
+    #     re1="/workspace/dataset/tumorTs/FLARE23Ts_0001_torch.nii.gz",
+    #     re2="/workspace/dataset/tumorTs/FLARE23Ts_0001_torch_disCudnn.nii.gz"
     # )
-    # compare_nnUNet_outputs(
-    #     r1_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/training_dataset/nnUNetPlansFLARE23TumorSmall__5folds_do_mirror_0713_full_window",
-    #     r2_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/Task023_FLARE23Tumor/labelsTr",
-    #     save_table=True, rename=["pred", "gt"], match_img_label=True
-    #     # folds=[i for i in range(5)]
-    # )
+    compare_nnUNet_outputs(
+        r1_dir="/workspace/dataset/tumorTs_withCudnn",
+        r2_dir="/workspace/dataset/Task30_disBenchmark",
+        save_table=False, rename=["pred1", "pred2"], match_img_label=False,
+        class_id=[i for i in range(1, 15)]
+        # folds=[i for i in range(5)]
+    )
     # compare_nnUNet_outputs(
     #     r1_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/merge/nnUNetPlansFLARE23TumorSmall__5folds_do_mirror_0713",
     #     r2_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/gt-validation-for-sanity-check",
@@ -607,10 +819,18 @@ if __name__ == "__main__":
     #     save_table=True, rename=["fullWindow_TTA", "fullWindow_TTA_again"], match_img_label=True
     # )
     # compare_val_results(
-    #     r1_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/gt-validation-for-sanity-check/ground_true",
-    #     r2_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/gt-validation-for-sanity-check/Task028__nnUNetPlansFLARE23TumorMedium__all_do_mirror_0727",
-    #     save_table=True, rename=["GT", "Task028__nnUNetPlansFLARE23TumorMedium__all_do_mirror_0727"],
-    #     match_img_label=True, class_id=[14]
+    #     r1_dir="/data/result/herongxuan/dataset/Release/labelsValidation",
+    #     r2_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Task034__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_TTA4_0811/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/gt-validation-for-sanity-check/Task030__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_closeTTA_closeGuassian_0803",
+    #     save_table=True, rename=["GT", "Task034_all_do_mirror_fullWindow_TTA4_0811"],
+    #     match_img_label=True,
+    #     # class_id=[14]
+    # )
+    # compare_val_results_flare23(
+    #     r1_dir="/data/result/herongxuan/dataset/Release/labelsValidation",
+    #     r2_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Task034__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_TTA4_allOARpp_0814/",
+    #     save_table=True, rename=["GT", "Task034_all_do_mirror_fullWindow_TTA4_allOARpp_0814"],
+    #     match_img_label=True,
+    #     # class_id=[14]
     # )
 
     # compute_uncertainty_of_pseudo_label_for_5_folds(
@@ -628,7 +848,7 @@ if __name__ == "__main__":
     # merge_oar_tumor_label(
     #     # oar_re_dir="/home/zhongzhiqiang/result/nnUNet_small_mirroring_0713_postprocessing",
     #     oar_re_dir="/home/zhongzhiqiang/result/Mixed_mirroring_postprocess_0_5",
-    #     tumor_re_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Task028__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_0728",
+    #     tumor_re_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/val_dataset/Task031__nnUNetPlansFLARE23TumorMedium__all_do_mirror_fullWindow_TTA4_0808",
     #     result_dir="/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/merge"
     # )
 
@@ -646,6 +866,13 @@ if __name__ == "__main__":
 
     # compute_slide_window_mask()
 
-    print("hello")
-    
+    # patch_size = (32, 128, 192)
+    # gaussian_importance = get_gaussian(patch_size)
 
+    # rename_files()
+
+    # pkl = load_pickle("/data/result/zhongzhiqiang/nnUNet/nnUNet_outputs/tensorrt_test/torch_model/"
+    #                   "Task030_FLARE23OARTumorMultiLabel/nnUNetTrainerV2_FLARE_Medium__nnUNetPlansFLARE23TumorMedium/all/model_final_checkpoint.model.pkl")
+    # print(pkl)
+
+    print("done")
