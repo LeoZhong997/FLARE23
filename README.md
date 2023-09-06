@@ -1,4 +1,4 @@
-# Solution of Team Blackbean for FLARE23 Challenge
+# Solution of Team voxelintelligence for FLARE23 Challenge
 
 Built upon [MIC-DKFZ/nnUNet](https://github.com/MIC-DKFZ/nnUNet) and [Ziyan-Huang/FLARE22](https://github.com/Ziyan-Huang/FLARE22), 
 this repository provides the solution of team voxelintelligence for [MICCAI FLARE23](https://codalab.lisn.upsaclay.fr/competitions/12239#learn_the_details-overview) Challenge. 
