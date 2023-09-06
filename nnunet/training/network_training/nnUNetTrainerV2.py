@@ -52,7 +52,7 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
         self.pin_memory = True
 
-    def initialize(self, training=True, force_load_plans=False):
+    def initialize(self, training=True, force_load_plans=False, trt_mode=False, trt_path=""):
         """
         - replaced get_default_augmentation with get_moreDA_augmentation
         - enforce to only run this code once
@@ -74,54 +74,59 @@ class nnUNetTrainerV2(nnUNetTrainer):
 
             ################# Here we wrap the loss for deep supervision ############
             # we need to know the number of outputs of the network
-            net_numpool = len(self.net_num_pool_op_kernel_sizes)
-
-            # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
-            # this gives higher resolution outputs more weight in the loss
-            weights = np.array([1 / (2 ** i) for i in range(net_numpool)])
-
-            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
-            mask = np.array([True] + [True if i < net_numpool - 1 else False for i in range(1, net_numpool)])
-            weights[~mask] = 0
-            weights = weights / weights.sum()
-            self.ds_loss_weights = weights
-            # now wrap the loss
-            self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            # net_numpool = len(self.net_num_pool_op_kernel_sizes)
+            #
+            # # we give each output a weight which decreases exponentially (division by 2) as the resolution decreases
+            # # this gives higher resolution outputs more weight in the loss
+            # weights = np.array([1 / (2 ** i) for i in range(net_numpool)])
+            #
+            # # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
+            # mask = np.array([True] + [True if i < net_numpool - 1 else False for i in range(1, net_numpool)])
+            # weights[~mask] = 0
+            # weights = weights / weights.sum()
+            # self.ds_loss_weights = weights
+            # # now wrap the loss
+            # self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
             ################# END ###################
 
-            self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
-                                                      "_stage%d" % self.stage)
-            if training:
-                self.dl_tr, self.dl_val = self.get_basic_generators()
-                if self.unpack_data:
-                    print("unpacking dataset")
-                    unpack_dataset(self.folder_with_preprocessed_data)
-                    print("done")
-                else:
-                    print(
-                        "INFO: Not unpacking data! Training may be slow due to that. Pray you are not using 2d or you "
-                        "will wait all winter for your model to finish!")
+            # self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
+            #                                           "_stage%d" % self.stage)
+            # if training:
+            #     self.dl_tr, self.dl_val = self.get_basic_generators()
+            #     if self.unpack_data:
+            #         print("unpacking dataset")
+            #         unpack_dataset(self.folder_with_preprocessed_data)
+            #         print("done")
+            #     else:
+            #         print(
+            #             "INFO: Not unpacking data! Training may be slow due to that. Pray you are not using 2d or you "
+            #             "will wait all winter for your model to finish!")
+            #
+            #     self.tr_gen, self.val_gen = get_moreDA_augmentation(
+            #         self.dl_tr, self.dl_val,
+            #         self.data_aug_params[
+            #             'patch_size_for_spatialtransform'],
+            #         self.data_aug_params,
+            #         deep_supervision_scales=self.deep_supervision_scales,
+            #         pin_memory=self.pin_memory,
+            #         use_nondetMultiThreadedAugmenter=False
+            #     )
+            #     self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
+            #                            also_print_to_console=False)
+            #     self.print_to_log_file("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())),
+            #                            also_print_to_console=False)
+            # else:
+            #     pass
 
-                self.tr_gen, self.val_gen = get_moreDA_augmentation(
-                    self.dl_tr, self.dl_val,
-                    self.data_aug_params[
-                        'patch_size_for_spatialtransform'],
-                    self.data_aug_params,
-                    deep_supervision_scales=self.deep_supervision_scales,
-                    pin_memory=self.pin_memory,
-                    use_nondetMultiThreadedAugmenter=False
-                )
-                self.print_to_log_file("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())),
-                                       also_print_to_console=False)
-                self.print_to_log_file("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())),
-                                       also_print_to_console=False)
+            if trt_mode:
+                self.trt_path = trt_path
+                self.trt_mode = trt_mode
+                self.load_trt_engine()
             else:
-                pass
+                self.initialize_network()
+                # self.initialize_optimizer_and_scheduler()
 
-            self.initialize_network()
-            self.initialize_optimizer_and_scheduler()
-
-            assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
+                assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
         else:
             self.print_to_log_file('self.was_initialized is True, not running self.initialize again')
         self.was_initialized = True
@@ -202,22 +207,38 @@ class nnUNetTrainerV2(nnUNetTrainer):
                                                          use_sliding_window: bool = True, step_size: float = 0.5,
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',
                                                          pad_kwargs: dict = None, all_in_gpu: bool = False,
-                                                         verbose: bool = True, mixed_precision=True) -> Tuple[np.ndarray, np.ndarray]:
+                                                         verbose: bool = True, mixed_precision=True,
+                                                         window_type='fast', trt_mode=False) -> Tuple[np.ndarray, np.ndarray]:
         """
         We need to wrap this because we need to enforce self.network.do_ds = False for prediction
         """
-        ds = self.network.do_ds
-        self.network.do_ds = False
-        ret = super().predict_preprocessed_data_return_seg_and_softmax(data,
-                                                                       do_mirroring=do_mirroring,
-                                                                       mirror_axes=mirror_axes,
-                                                                       use_sliding_window=use_sliding_window,
-                                                                       step_size=step_size, use_gaussian=use_gaussian,
-                                                                       pad_border_mode=pad_border_mode,
-                                                                       pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
-                                                                       verbose=verbose,
-                                                                       mixed_precision=mixed_precision)
-        self.network.do_ds = ds
+        if trt_mode:
+            ret = super().predict_preprocessed_data_return_seg_and_softmax(data,
+                                                                           do_mirroring=do_mirroring,
+                                                                           mirror_axes=mirror_axes,
+                                                                           use_sliding_window=use_sliding_window,
+                                                                           step_size=step_size,
+                                                                           use_gaussian=use_gaussian,
+                                                                           pad_border_mode=pad_border_mode,
+                                                                           pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
+                                                                           verbose=verbose,
+                                                                           mixed_precision=mixed_precision,
+                                                                           window_type=window_type,
+                                                                           trt_mode=trt_mode)
+        else:
+            ds = self.network.do_ds
+            self.network.do_ds = False
+            ret = super().predict_preprocessed_data_return_seg_and_softmax(data,
+                                                                           do_mirroring=do_mirroring,
+                                                                           mirror_axes=mirror_axes,
+                                                                           use_sliding_window=use_sliding_window,
+                                                                           step_size=step_size, use_gaussian=use_gaussian,
+                                                                           pad_border_mode=pad_border_mode,
+                                                                           pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
+                                                                           verbose=verbose,
+                                                                           mixed_precision=mixed_precision,
+                                                                           window_type=window_type)
+            self.network.do_ds = ds
         return ret
 
     def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False):

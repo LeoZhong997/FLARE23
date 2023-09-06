@@ -16,7 +16,7 @@
 import argparse
 import torch
 
-from nnunet.inference.predict import predict_from_folder
+from nnunet.inference.predict_pure import predict_from_folder
 from nnunet.paths import default_plans_identifier, network_training_output_dir, default_cascade_trainer, default_trainer
 from batchgenerators.utilities.file_and_folder_operations import join, isdir
 from nnunet.utilities.task_name_id_conversion import convert_id_to_task_name
@@ -29,6 +29,7 @@ def main():
                                                      "CASENAME_XXXX.nii.gz where XXXX is the modality "
                                                      "identifier (0000, 0001, etc)", required=True)
     parser.add_argument('-o', "--output_folder", required=True, help="folder for saving predictions")
+    parser.add_argument('--preprocessing_folder',default=None, help="If not None, then the preprocessing data will be loaded")
     parser.add_argument('-t', '--task_name', help='task name or task ID, required.',
                         default=default_plans_identifier, required=True)
 
@@ -77,6 +78,8 @@ def main():
                                                                                "GPU (for example via "
                                                                                "CUDA_VISIBLE_DEVICES=X)")
 
+    parser.add_argument("-w", '--slicing_window', required=False, default='fast',help="fast or full. Default: fast")
+
     parser.add_argument("--num_parts", type=int, required=False, default=1,
                         help="Used to parallelize the prediction of "
                              "the folder over several GPUs. If you "
@@ -98,6 +101,10 @@ def main():
     parser.add_argument("--disable_tta", required=False, default=False, action="store_true",
                         help="set this flag to disable test time data augmentation via mirroring. Speeds up inference "
                              "by roughly factor 4 (2D) or 8 (3D)")
+    
+    parser.add_argument("--disable_postprocessing", required=False, default=False, action="store_true",help="set this flag to disable postprocessing.")
+
+    parser.add_argument("--do_trt", required=False, default=False, action="store_true",help="set this flag to disable postprocessing.")
 
     parser.add_argument("--overwrite_existing", required=False, default=False, action="store_true",
                         help="Set this flag if the target folder contains predictions that you would like to overwrite")
@@ -134,6 +141,7 @@ def main():
     num_threads_nifti_save = args.num_threads_nifti_save
     disable_tta = args.disable_tta
     step_size = args.step_size
+    preprocessing_folder = args.preprocessing_folder
     # interp_order = args.interp_order
     # interp_order_z = args.interp_order_z
     # force_separate_z = args.force_separate_z
@@ -145,7 +153,9 @@ def main():
     cascade_trainer_class_name = args.cascade_trainer_class_name
 
     task_name = args.task_name
-
+    window_type = args.slicing_window
+    disable_postprocessing = args.disable_postprocessing
+    trt_mode = args.do_trt
     if not task_name.startswith("Task"):
         task_id = int(task_name)
         task_name = convert_id_to_task_name(task_id)
@@ -220,7 +230,8 @@ def main():
                         num_threads_nifti_save, lowres_segmentations, part_id, num_parts, not disable_tta,
                         overwrite_existing=overwrite_existing, mode=mode, overwrite_all_in_gpu=all_in_gpu,
                         mixed_precision=not args.disable_mixed_precision,
-                        step_size=step_size, checkpoint_name=args.chk)
+                        step_size=step_size, checkpoint_name=args.chk, disable_postprocessing=disable_postprocessing,
+                        window_type=window_type, preprocessing_folder=preprocessing_folder, trt_mode=trt_mode)
                         
     print('Total predict time: ', time.time()-predict_start_time)
 

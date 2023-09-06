@@ -385,6 +385,7 @@ class Generic_UNet(SegmentationNetwork):
             # self.apply(print_module_training_status)
 
     def forward(self, x):
+        # print("in", x.shape, x.dtype)
         skips = []
         seg_outputs = []
         for d in range(len(self.conv_blocks_context) - 1):
@@ -394,12 +395,14 @@ class Generic_UNet(SegmentationNetwork):
                 x = self.td[d](x)
 
         x = self.conv_blocks_context[-1](x)
+        # print("enc", x.shape, x.dtype)
 
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skips[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
+        # print("dec", x.shape, x.dtype, self._deep_supervision, self.do_ds, len(seg_outputs))
 
         if self._deep_supervision and self.do_ds:
             return tuple([seg_outputs[-1]] + [i(j) for i, j in

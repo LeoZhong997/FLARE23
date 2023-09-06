@@ -78,7 +78,7 @@ class SegmentationNetwork(NeuralNetwork):
                    regions_class_order: Tuple[int, ...] = None,
                    use_gaussian: bool = False, pad_border_mode: str = "constant",
                    pad_kwargs: dict = None, all_in_gpu: bool = False,
-                   verbose: bool = True, mixed_precision: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+                   verbose: bool = True, mixed_precision: bool = True, window_type = 'fast') -> Tuple[np.ndarray, np.ndarray]:
         """
         Use this function to predict a 3D image. It does not matter whether the network is a 2D or 3D U-Net, it will
         detect that automatically and run the appropriate code.
@@ -145,12 +145,20 @@ class SegmentationNetwork(NeuralNetwork):
             with torch.no_grad():
                 if self.conv_op == nn.Conv3d:
                     if use_sliding_window:
-                        # res = self._internal_predict_3D_3Dconv_tiled(x, step_size, do_mirroring, mirror_axes,
-                        res = self._internal_predict_3D_3Dconv_tiled_full_window(x, step_size, do_mirroring, mirror_axes,
+                        if window_type == 'fast':
+                            res = self._internal_predict_3D_3Dconv_tiled(x, step_size, do_mirroring, mirror_axes, patch_size,
+                                                                        regions_class_order, use_gaussian, pad_border_mode,
+                                                                        pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
+                                                                        verbose=verbose)
+                        elif window_type == 'full':
+                            res = self._internal_predict_3D_3Dconv_tiled_full_window(x, step_size, do_mirroring, mirror_axes,
                                                                      patch_size,
                                                                      regions_class_order, use_gaussian, pad_border_mode,
                                                                      pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
                                                                      verbose=verbose)
+                        else:
+                            print(f"\033[91m Window type is wrong!\033[00m")
+                            raise ValueError("window type is wrong")
                     else:
                         res = self._internal_predict_3D_3Dconv(x, patch_size, do_mirroring, mirror_axes,
                                                                regions_class_order,
@@ -239,13 +247,11 @@ class SegmentationNetwork(NeuralNetwork):
             with torch.no_grad():
                 if self.conv_op == nn.Conv2d:
                     if use_sliding_window:
-                        res = self._internal_predict_2D_2Dconv_tiled(x, step_size, do_mirroring, mirror_axes,
-                                                                     patch_size,
+                        res = self._internal_predict_2D_2Dconv_tiled(x, step_size, do_mirroring, mirror_axes, patch_size,
                                                                      regions_class_order, use_gaussian, pad_border_mode,
                                                                      pad_kwargs, all_in_gpu, verbose)
                     else:
-                        res = self._internal_predict_2D_2Dconv(x, patch_size, do_mirroring, mirror_axes,
-                                                               regions_class_order,
+                        res = self._internal_predict_2D_2Dconv(x, patch_size, do_mirroring, mirror_axes, regions_class_order,
                                                                pad_border_mode, pad_kwargs, verbose)
                 else:
                     raise RuntimeError("Invalid conv op, cannot determine what dimensionality (2d/3d) the network is")
@@ -269,8 +275,7 @@ class SegmentationNetwork(NeuralNetwork):
         return gaussian_importance_map
 
     @staticmethod
-    def _compute_steps_for_sliding_window(patch_size: Tuple[int, ...], image_size: Tuple[int, ...], step_size: float) -> \
-            List[List[int]]:
+    def _compute_steps_for_sliding_window(patch_size: Tuple[int, ...], image_size: Tuple[int, ...], step_size: float) -> List[List[int]]:
         assert [i >= j for i, j in zip(image_size, patch_size)], "image size must be as large or larger than patch_size"
         assert 0 < step_size <= 1, 'step_size must be larger than 0 and smaller or equal to 1'
 
@@ -278,14 +283,13 @@ class SegmentationNetwork(NeuralNetwork):
         # 110, patch size of 64 and step_size of 0.5, then we want to make 3 steps starting at coordinate 0, 23, 46
         target_step_sizes_in_voxels = [i * step_size for i in patch_size]
 
-        num_steps = [int(np.ceil((i - k) / j)) + 1 for i, j, k in
-                     zip(image_size, target_step_sizes_in_voxels, patch_size)]
+        num_steps = [int(np.ceil((i - k) / j)) + 1 for i, j, k in zip(image_size, target_step_sizes_in_voxels, patch_size)]
 
-        # 3×3方案
+        # 3 × 3
         num_steps[1] = 3
         num_steps[2] = 3
-        # 这里假设 patch_size 为 [40, 128, 160]
-        # 先决定 z 轴的steps
+
+        # Decide steps of z axis
         steps = []
         max_step_value = image_size[0] - patch_size[0]
         if num_steps[0] > 1:
@@ -295,7 +299,7 @@ class SegmentationNetwork(NeuralNetwork):
         steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[0])]
         steps.append(steps_here)
 
-        #  决定 y 轴的steps，step个数固定为3
+        #  fix steps of y axis to be 3
         if image_size[1] > 2.0 * patch_size[1]:
             steps_here = [int(np.round(image_size[1] / 2) - 1.0 * patch_size[1]),
                           int(np.round(image_size[1] / 2) - 0.5 * patch_size[1]),
@@ -306,8 +310,8 @@ class SegmentationNetwork(NeuralNetwork):
         else:
             steps_here = [0]
         steps.append(steps_here)
-
-        # 准备 x 轴的 steps，step个数固定为3
+        
+        #  fix steps of x axis to be 3
         if image_size[2] > 2.0 * patch_size[2]:
             steps_here = [int(np.round(image_size[2] / 2) - 1.0 * patch_size[2]),
                           int(np.round(image_size[2] / 2) - 0.5 * patch_size[2]),
@@ -318,53 +322,8 @@ class SegmentationNetwork(NeuralNetwork):
         else:
             steps_here = [0]
         steps.append(steps_here)
-
-        # 3×2方案
-        # num_steps[1] = 2
-        # num_steps[2] = 3
-        # # 这里假设 patch_size 为 [40, 160, 160]
-        # # 先决定 z 轴的steps
-        # steps = []
-        # max_step_value = image_size[0] - patch_size[0]
-        # if num_steps[0] > 1:
-        #     actual_step_size = max_step_value / (num_steps[0] - 1)
-        # else:
-        #     actual_step_size = 99999999999  # does not matter because there is only one step at 0
-        # steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[0])]
-        # steps.append(steps_here)
-
-        # #  决定 y 轴的steps，step个数固定为2
-        # assert image_size[1] > 1.5 * patch_size[1]
-        # if image_size[1] > 1.5 * patch_size[1]: # 必满足
-        #     steps_here = [int(np.round(image_size[1]/2)-0.75*patch_size[1]), int(np.round(image_size[1]/2)-0.25*patch_size[1])]
-        # else:
-        #     actual_step_size = (image_size[1] - patch_size[1]) / 2
-        #     steps_here = [int(np.round(actual_step_size * i)) for i in range(3)]
-        # steps.append(steps_here)
-
-        # # 准备 x 轴的 steps，step个数固定为3
-        # if image_size[2] > 2.0 * patch_size[2]:
-        #     steps_here = [int(np.round(image_size[2]/2)-1.0*patch_size[2]), int(np.round(image_size[2]/2)-0.5*patch_size[2]), int(np.round(image_size[2]/2)+0.*patch_size[2])]
-        # else:
-        #     actual_step_size = (image_size[2] - patch_size[2]) / 2
-        #     steps_here = [int(np.round(actual_step_size * i)) for i in range(3)]
-        # steps.append(steps_here)
-
         return steps
 
-        # for dim in range(len(patch_size)):
-        #     # the highest step value for this dimension is
-        #     max_step_value = image_size[dim] - patch_size[dim]
-        #     if num_steps[dim] > 1:
-        #         actual_step_size = max_step_value / (num_steps[dim] - 1)
-        #     else:
-        #         actual_step_size = 99999999999  # does not matter because there is only one step at 0
-
-        #     steps_here = [int(np.round(actual_step_size * i)) for i in range(num_steps[dim])]
-
-        #     steps.append(steps_here)
-
-        # return steps
 
     def _internal_predict_3D_3Dconv_tiled(self, x: np.ndarray, step_size: float, do_mirroring: bool, mirror_axes: tuple,
                                           patch_size: tuple, regions_class_order: tuple, use_gaussian: bool,
@@ -463,18 +422,24 @@ class SegmentationNetwork(NeuralNetwork):
         for z in steps[0]:
 
             if is_empty == True:
-                # 如果完全空就在 z 轴上多跳一步
+                # z axis next step
                 is_empty = False
                 continue
-
-            # 对该 xy 平面共有 9 个 window， 对正中央的 1 个 window 进行推理
+            
+            # central window
             lb_z = z
             ub_z = z + patch_size[0]
 
-            # 看正中的 window
-            lb_y = steps[1][1]
+            # Modification, the original solution did not consider the slice of x or y axis is only 1.
+            if len(steps[1]) == 1:
+                lb_y = 0
+            else:
+                lb_y = steps[1][1]
             ub_y = lb_y + patch_size[1]
-            lb_x = steps[2][1]
+            if len(steps[2]) == 1:
+                lb_x = 0
+            else:
+                lb_x = steps[2][1]
             ub_x = lb_x + patch_size[2]
             predicted_patch = self._internal_maybe_mirror_and_pred_3D(
                 data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
@@ -485,8 +450,7 @@ class SegmentationNetwork(NeuralNetwork):
 
             if not (is_empty or is_half_empty):
                 labels = torch.unique(torch.argmax(predicted_patch, 0))
-                is_tube = torch.logical_or(torch.logical_or(torch.logical_or(labels == 0, labels == 5), labels == 10),
-                                           labels == 6).all()
+                is_tube = torch.logical_or(torch.logical_or(torch.logical_or(labels==0, labels==5), labels==10), labels==6).all()
                 if is_tube:
                     tube_front = torch.sum(torch.argmax(predicted_patch[:, :, 0, :], 0) > 0) > 10
                     tube_back = torch.sum(torch.argmax(predicted_patch[:, :, -1, :], 0) > 0) > 10
@@ -506,13 +470,20 @@ class SegmentationNetwork(NeuralNetwork):
                     for x in steps[2]:
                         lb_x = x
                         ub_x = lb_x + patch_size[2]
+                        
+                        if len(steps[1]) == 1 and len(steps[2]) == 1:
+                            continue
+                        idx_y = 0 if len(steps[1]) == 1 else 1 
+                        idx_x = 0 if len(steps[2]) == 1 else 1
 
-                        if y == steps[1][1] and x == steps[2][1]:  # 最中间的不用再跑了
+                        if y==steps[1][idx_y] and x==steps[2][idx_x]: # have run the central window
                             continue
 
                         if is_tube:
                             assert tube_front or tube_back
-                            if x != steps[2][1]:
+                            if x != steps[2][idx_x]:
+                                continue
+                            if idx_y == 0:
                                 continue
                             if tube_front and y == steps[1][0]:
                                 print('tube front')
@@ -532,84 +503,10 @@ class SegmentationNetwork(NeuralNetwork):
                         aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
                         aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
                         print(">>>Debug _internal_predict_3D_3Dconv_tiled: ", lb_z, ub_z, lb_y, ub_y, lb_x, ub_x)
-
-        # is_empty = False
-        # num_window = 0
-        # for z in steps[0]:
-
-        #     if is_empty == True:
-        #         # 在 z 轴上多跳一步
-        #         is_empty = False
-        #         continue
-
-        #     # 对该 xy 平面共有 6 个 window， 对正中央的 2 个 window 进行推理
-        #     lb_z = z
-        #     ub_z = z + patch_size[0]
-
-        #     for y in steps[1]:
-        #         lb_y = y
-        #         ub_y = lb_y + patch_size[1]
-
-        #         # 先看正中的 window
-        #         lb_x = steps[2][1]
-        #         ub_x = lb_x + patch_size[2]
-        #         predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #             data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-        #             gaussian_importance_map)[0]
-        #         num_window += 1
-        #         is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-        #         # is_empty = False
-        #         if not is_empty:
-        #             if all_in_gpu:
-        #                 predicted_patch = predicted_patch.half()
-        #             else:
-        #                 predicted_patch = predicted_patch.cpu().numpy()
-        #             aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-        #             aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
-
-        #             for x in steps[2][::2]:
-        #                 lb_x = x
-        #                 ub_x = x + patch_size[2]
-        #                 predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #                     data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-        #                     gaussian_importance_map)[0]
-        #                 num_window += 1
-        #                 # 判断右前方是否包含前景，设置阈值排除假阳性
-        #                 is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-        #                 # is_empty = False
-        #                 if not is_empty:
-        #                     if all_in_gpu:
-        #                         predicted_patch = predicted_patch.half()
-        #                     else:
-        #                         predicted_patch = predicted_patch.cpu().numpy()
-        #                     aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-        #                     aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds      
-
-        #                 is_empty = False          
-
+       
+        
         print('num tiles:  ', num_tiles)
         print('num_window: ', num_window)
-        # for x in steps[0]:
-        #     lb_x = x
-        #     ub_x = x + patch_size[0]
-        #     for y in steps[1]:
-        #         lb_y = y
-        #         ub_y = y + patch_size[1]
-        #         for z in steps[2]:
-        #             lb_z = z
-        #             ub_z = z + patch_size[2]
-
-        #             predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #                 data[None, :, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z], mirror_axes, do_mirroring,
-        #                 gaussian_importance_map)[0]
-
-        #             if all_in_gpu:
-        #                 predicted_patch = predicted_patch.half()
-        #             else:
-        #                 predicted_patch = predicted_patch.cpu().numpy()
-
-        #             aggregated_results[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += predicted_patch
-        #             aggregated_nb_of_predictions[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += add_for_nb_of_preds
 
         # we reverse the padding here (remeber that we padded the input to be at least as large as the patch size
         slicer = tuple(
@@ -623,24 +520,6 @@ class SegmentationNetwork(NeuralNetwork):
         del aggregated_nb_of_predictions
 
         predicted_segmentation = aggregated_results.argmax(0)
-        # if regions_class_order is None:
-        #     predicted_segmentation = aggregated_results.argmax(0)
-        # else:
-        #     if all_in_gpu:
-        #         class_probabilities_here = aggregated_results.detach().cpu().numpy()
-        #     else:
-        #         class_probabilities_here = aggregated_results
-        #     predicted_segmentation = np.zeros(class_probabilities_here.shape[1:], dtype=np.float32)
-        #     for i, c in enumerate(regions_class_order):
-        #         predicted_segmentation[class_probabilities_here[i] > 0.5] = c
-
-        # if all_in_gpu:
-        #     if verbose: print("copying results to CPU")
-
-        #     if regions_class_order is None:
-        #         predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
-
-        #     aggregated_results = aggregated_results.detach().cpu().numpy()
         if all_in_gpu:
             if verbose: print("copying results to CPU")
             predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
@@ -722,7 +601,7 @@ class SegmentationNetwork(NeuralNetwork):
 
                 add_for_nb_of_preds = gaussian_importance_map
             else:
-                add_for_nb_of_preds = torch.ones(patch_size, device=self.get_device())
+                add_for_nb_of_preds = torch.ones(list(patch_size), device=self.get_device())
 
             if verbose: print("initializing result array (on GPU)")
             aggregated_results = torch.zeros([self.num_classes] + list(data.shape[1:]), dtype=torch.half,
@@ -747,35 +626,25 @@ class SegmentationNetwork(NeuralNetwork):
         num_window = 0
         for z in steps[0]:
 
-            # if is_empty == True:
-            #     # 如果完全空就在 z 轴上多跳一步
-            #     is_empty = False
-            #     continue
-
-            # 对该 xy 平面共有 9 个 window， 对正中央的 1 个 window 进行推理
             lb_z = z
             ub_z = z + patch_size[0]
 
-            # 看正中的 window
-            lb_y = steps[1][1]
+            if len(steps[1]) == 1:
+                lb_y = 0
+            else:
+                lb_y = steps[1][1]
             ub_y = lb_y + patch_size[1]
-            lb_x = steps[2][1]
+            if len(steps[2]) == 1:
+                lb_x = 0
+            else:
+                lb_x = steps[2][1]
             ub_x = lb_x + patch_size[2]
             predicted_patch = self._internal_maybe_mirror_and_pred_3D(
                 data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
                 gaussian_importance_map)[0]
             num_window += 1
-            # is_empty = torch.sum(torch.argmax(predicted_patch, 0) > 0) < 1000
-            # is_half_empty = torch.sum(torch.argmax(predicted_patch[:, :int(0.6 * patch_size[1]), :, :], 0) > 0) < 500
 
-            # if not (is_empty or is_half_empty):
             if True:
-                # labels = torch.unique(torch.argmax(predicted_patch, 0))
-                # is_tube = torch.logical_or(torch.logical_or(torch.logical_or(labels == 0, labels == 5), labels == 10),
-                #                            labels == 6).all()
-                # if is_tube:
-                #     tube_front = torch.sum(torch.argmax(predicted_patch[:, :, 0, :], 0) > 0) > 10
-                #     tube_back = torch.sum(torch.argmax(predicted_patch[:, :, -1, :], 0) > 0) > 10
                 if all_in_gpu:
                     predicted_patch = predicted_patch.half()
                 else:
@@ -783,8 +652,6 @@ class SegmentationNetwork(NeuralNetwork):
                 aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
                 aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
 
-                # if is_tube and not (tube_front or tube_back):
-                #     continue
 
                 for y in steps[1]:
                     lb_y = y
@@ -793,19 +660,13 @@ class SegmentationNetwork(NeuralNetwork):
                         lb_x = x
                         ub_x = lb_x + patch_size[2]
 
-                        if y == steps[1][1] and x == steps[2][1]:  # 最中间的不用再跑了
+                        if len(steps[1]) == 1 and len(steps[2]) == 1:
                             continue
+                        idx_y = 0 if len(steps[1]) == 1 else 1
+                        idx_x = 0 if len(steps[2]) == 1 else 1
 
-                        # if is_tube:
-                        #     assert tube_front or tube_back
-                        #     if x != steps[2][1]:
-                        #         continue
-                        #     if tube_front and y == steps[1][0]:
-                        #         print('tube front')
-                        #     elif tube_back and y == steps[1][2]:
-                        #         print('tube back')
-                        #     else:
-                        #         continue
+                        if y == steps[1][idx_y] and x == steps[2][idx_x]:
+                            continue
 
                         predicted_patch = self._internal_maybe_mirror_and_pred_3D(
                             data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
@@ -817,86 +678,10 @@ class SegmentationNetwork(NeuralNetwork):
                             predicted_patch = predicted_patch.cpu().numpy()
                         aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
                         aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
-                        print(">>>Debug _internal_predict_3D_3Dconv_tiled_full_window: ",
-                              lb_z, ub_z, lb_y, ub_y, lb_x, ub_x)
-
-        # is_empty = False
-        # num_window = 0
-        # for z in steps[0]:
-
-        #     if is_empty == True:
-        #         # 在 z 轴上多跳一步
-        #         is_empty = False
-        #         continue
-
-        #     # 对该 xy 平面共有 6 个 window， 对正中央的 2 个 window 进行推理
-        #     lb_z = z
-        #     ub_z = z + patch_size[0]
-
-        #     for y in steps[1]:
-        #         lb_y = y
-        #         ub_y = lb_y + patch_size[1]
-
-        #         # 先看正中的 window
-        #         lb_x = steps[2][1]
-        #         ub_x = lb_x + patch_size[2]
-        #         predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #             data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-        #             gaussian_importance_map)[0]
-        #         num_window += 1
-        #         is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-        #         # is_empty = False
-        #         if not is_empty:
-        #             if all_in_gpu:
-        #                 predicted_patch = predicted_patch.half()
-        #             else:
-        #                 predicted_patch = predicted_patch.cpu().numpy()
-        #             aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-        #             aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
-
-        #             for x in steps[2][::2]:
-        #                 lb_x = x
-        #                 ub_x = x + patch_size[2]
-        #                 predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #                     data[None, :, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x], mirror_axes, do_mirroring,
-        #                     gaussian_importance_map)[0]
-        #                 num_window += 1
-        #                 # 判断右前方是否包含前景，设置阈值排除假阳性
-        #                 is_empty = torch.sum(torch.argmax(predicted_patch, 0)>0)<1000
-        #                 # is_empty = False
-        #                 if not is_empty:
-        #                     if all_in_gpu:
-        #                         predicted_patch = predicted_patch.half()
-        #                     else:
-        #                         predicted_patch = predicted_patch.cpu().numpy()
-        #                     aggregated_results[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += predicted_patch
-        #                     aggregated_nb_of_predictions[:, lb_z:ub_z, lb_y:ub_y, lb_x:ub_x] += add_for_nb_of_preds
-
-        #                 is_empty = False
-
+                        # print(">>>Debug _internal_predict_3D_3Dconv_tiled_full_window: ",
+                        #       lb_z, ub_z, lb_y, ub_y, lb_x, ub_x)
         print('num tiles:  ', num_tiles)
         print('num_window: ', num_window)
-        # for x in steps[0]:
-        #     lb_x = x
-        #     ub_x = x + patch_size[0]
-        #     for y in steps[1]:
-        #         lb_y = y
-        #         ub_y = y + patch_size[1]
-        #         for z in steps[2]:
-        #             lb_z = z
-        #             ub_z = z + patch_size[2]
-
-        #             predicted_patch = self._internal_maybe_mirror_and_pred_3D(
-        #                 data[None, :, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z], mirror_axes, do_mirroring,
-        #                 gaussian_importance_map)[0]
-
-        #             if all_in_gpu:
-        #                 predicted_patch = predicted_patch.half()
-        #             else:
-        #                 predicted_patch = predicted_patch.cpu().numpy()
-
-        #             aggregated_results[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += predicted_patch
-        #             aggregated_nb_of_predictions[:, lb_x:ub_x, lb_y:ub_y, lb_z:ub_z] += add_for_nb_of_preds
 
         # we reverse the padding here (remeber that we padded the input to be at least as large as the patch size
         slicer = tuple(
@@ -910,24 +695,7 @@ class SegmentationNetwork(NeuralNetwork):
         del aggregated_nb_of_predictions
 
         predicted_segmentation = aggregated_results.argmax(0)
-        # if regions_class_order is None:
-        #     predicted_segmentation = aggregated_results.argmax(0)
-        # else:
-        #     if all_in_gpu:
-        #         class_probabilities_here = aggregated_results.detach().cpu().numpy()
-        #     else:
-        #         class_probabilities_here = aggregated_results
-        #     predicted_segmentation = np.zeros(class_probabilities_here.shape[1:], dtype=np.float32)
-        #     for i, c in enumerate(regions_class_order):
-        #         predicted_segmentation[class_probabilities_here[i] > 0.5] = c
 
-        # if all_in_gpu:
-        #     if verbose: print("copying results to CPU")
-
-        #     if regions_class_order is None:
-        #         predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
-
-        #     aggregated_results = aggregated_results.detach().cpu().numpy()
         if all_in_gpu:
             if verbose: print("copying results to CPU")
             predicted_segmentation = predicted_segmentation.detach().cpu().numpy()
@@ -935,7 +703,7 @@ class SegmentationNetwork(NeuralNetwork):
 
         if verbose: print("prediction done")
         return predicted_segmentation, aggregated_results
-        # return predicted_segmentation, None
+
 
     def _internal_predict_2D_2Dconv(self, x: np.ndarray, min_size: Tuple[int, int], do_mirroring: bool,
                                     mirror_axes: tuple = (0, 1, 2), regions_class_order: tuple = None,
@@ -1038,38 +806,67 @@ class SegmentationNetwork(NeuralNetwork):
             mirror_idx = 1
             num_results = 1
 
-        for m in range(mirror_idx):
-            if m == 0:
-                pred = self.inference_apply_nonlin(self(x))
-                result_torch += 1 / num_results * pred
+        batchTTA = False
+        TTA4 = True
+        print(">>>SegmentationNetwork TTA4, batchTTA, mirror_idx: ", TTA4, batchTTA, mirror_idx)
+        if batchTTA:
+            # x -> torch.Size([1, 1, 32, 128, 192]), torch.float32, [2, 3, 4] are index of z, y, x-axis
+            # partial tta for batch inference
+            tta_batch_data = torch.concat((x, torch.flip(x, (4,)), torch.flip(x, (3,)), torch.flip(x, (2,)),
+                                           # torch.flip(x, (4, 3)), torch.flip(x, (4, 2)), torch.flip(x, (3, 2)),
+                                           # torch.flip(x, (4, 3, 2))
+                                           ), dim=0)
+            tta_batch_pred = self.inference_apply_nonlin(self(tta_batch_data))
+            tta_batch_pred[1:2] = torch.flip(tta_batch_pred[1:2], (4,))
+            tta_batch_pred[2:3] = torch.flip(tta_batch_pred[2:3], (3,))
+            tta_batch_pred[3:4] = torch.flip(tta_batch_pred[3:4], (2,))
+            # tta_batch_pred[4:5] = torch.flip(tta_batch_pred[4:5], (4, 3))
+            # tta_batch_pred[5:6] = torch.flip(tta_batch_pred[5:6], (4, 2))
+            # tta_batch_pred[6:7] = torch.flip(tta_batch_pred[6:7], (3, 2))
+            # tta_batch_pred[7:8] = torch.flip(tta_batch_pred[7:8], (4, 3, 2))
+            result_torch = torch.mean(tta_batch_pred, dim=0, keepdim=True)
+        elif TTA4:
+            pred = self.inference_apply_nonlin(self(x))
+            result_torch += 1 / num_results * pred
+            pred = self.inference_apply_nonlin(self(torch.flip(x, (4,))))
+            result_torch += 1 / num_results * torch.flip(pred, (4,))
+            pred = self.inference_apply_nonlin(self(torch.flip(x, (3,))))
+            result_torch += 1 / num_results * torch.flip(pred, (3,))
+            pred = self.inference_apply_nonlin(self(torch.flip(x, (2,))))
+            result_torch += 1 / num_results * torch.flip(pred, (2,))
+        else:
+            for m in range(mirror_idx):
+                if m == 0:
+                    pred = self.inference_apply_nonlin(self(x))
+                    result_torch += 1 / num_results * pred
 
-            if m == 1 and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4,))))
-                result_torch += 1 / num_results * torch.flip(pred, (4,))
+                if m == 1 and (2 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4,))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4,))
 
-            if m == 2 and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (3,))))
-                result_torch += 1 / num_results * torch.flip(pred, (3,))
+                if m == 2 and (1 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (3,))))
+                    result_torch += 1 / num_results * torch.flip(pred, (3,))
 
-            if m == 3 and (2 in mirror_axes) and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3))))
-                result_torch += 1 / num_results * torch.flip(pred, (4, 3))
+                if m == 3 and (2 in mirror_axes) and (1 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4, 3))
 
-            if m == 4 and (0 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (2,))))
-                result_torch += 1 / num_results * torch.flip(pred, (2,))
+                if m == 4 and (0 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (2,))))
+                    result_torch += 1 / num_results * torch.flip(pred, (2,))
 
-            if m == 5 and (0 in mirror_axes) and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 2))))
-                result_torch += 1 / num_results * torch.flip(pred, (4, 2))
+                if m == 5 and (0 in mirror_axes) and (2 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 2))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4, 2))
 
-            if m == 6 and (0 in mirror_axes) and (1 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (3, 2))))
-                result_torch += 1 / num_results * torch.flip(pred, (3, 2))
+                if m == 6 and (0 in mirror_axes) and (1 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (3, 2))))
+                    result_torch += 1 / num_results * torch.flip(pred, (3, 2))
 
-            if m == 7 and (0 in mirror_axes) and (1 in mirror_axes) and (2 in mirror_axes):
-                pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3, 2))))
-                result_torch += 1 / num_results * torch.flip(pred, (4, 3, 2))
+                if m == 7 and (0 in mirror_axes) and (1 in mirror_axes) and (2 in mirror_axes):
+                    pred = self.inference_apply_nonlin(self(torch.flip(x, (4, 3, 2))))
+                    result_torch += 1 / num_results * torch.flip(pred, (4, 3, 2))
 
         if mult is not None:
             result_torch[:, :] *= mult

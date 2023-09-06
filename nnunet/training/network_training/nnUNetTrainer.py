@@ -184,7 +184,7 @@ class nnUNetTrainer(NetworkTrainer):
         self.data_aug_params['selected_seg_channels'] = [0]
         self.data_aug_params['patch_size_for_spatialtransform'] = self.patch_size
 
-    def initialize(self, training=True, force_load_plans=False):
+    def initialize(self, training=True, force_load_plans=False, trt_mode=False, trt_path=""):
         """
         For prediction of test cases just set training=False, this will prevent loading of training data and
         training batchgenerator initialization
@@ -224,10 +224,22 @@ class nnUNetTrainer(NetworkTrainer):
                                    also_print_to_console=False)
         else:
             pass
-        self.initialize_network()
-        self.initialize_optimizer_and_scheduler()
-        # assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
+
+        if trt_mode:
+            self.trt_path = trt_path
+            self.trt_mode = trt_mode
+            self.load_trt_engine()
+        else:
+            self.initialize_network()
+            self.initialize_optimizer_and_scheduler()
+            # assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
         self.was_initialized = True
+
+    def load_trt_engine(self):
+        # from nnunet.utilities.trt_utils import TensorRTSession
+        # self.trt_session = TensorRTSession(self.trt_path, self.num_classes)
+        from nnunet.utilities.trt_utils import TRTModule
+        self.trt_session = TRTModule(self.trt_path, self.num_classes)
 
     def initialize_network(self):
         """
@@ -485,7 +497,9 @@ class nnUNetTrainer(NetworkTrainer):
                                                          use_sliding_window: bool = True, step_size: float = 0.5,
                                                          use_gaussian: bool = True, pad_border_mode: str = 'constant',
                                                          pad_kwargs: dict = None, all_in_gpu: bool = False,
-                                                         verbose: bool = True, mixed_precision: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+                                                         verbose: bool = True, mixed_precision: bool = True,
+                                                         window_type='fast', trt_mode=False) -> Tuple[
+        np.ndarray, np.ndarray]:
         """
         :param data:
         :param do_mirroring:
@@ -509,18 +523,26 @@ class nnUNetTrainer(NetworkTrainer):
             assert self.data_aug_params["do_mirror"], "Cannot do mirroring as test time augmentation when training " \
                                                       "was done without mirroring"
 
-        valid = list((SegmentationNetwork, nn.DataParallel))
-        assert isinstance(self.network, tuple(valid))
+        if trt_mode:
+            ret = self.trt_session.predict_3D(data, do_mirroring=do_mirroring, mirror_axes=mirror_axes,
+                                              use_sliding_window=use_sliding_window, step_size=step_size,
+                                              patch_size=self.patch_size, regions_class_order=self.regions_class_order,
+                                              use_gaussian=use_gaussian, pad_border_mode=pad_border_mode,
+                                              pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu, verbose=verbose,
+                                              mixed_precision=mixed_precision, window_type=window_type)
+        else:
+            valid = list((SegmentationNetwork, nn.DataParallel))
+            assert isinstance(self.network, tuple(valid))
 
-        current_mode = self.network.training
-        self.network.eval()
-        ret = self.network.predict_3D(data, do_mirroring=do_mirroring, mirror_axes=mirror_axes,
-                                      use_sliding_window=use_sliding_window, step_size=step_size,
-                                      patch_size=self.patch_size, regions_class_order=self.regions_class_order,
-                                      use_gaussian=use_gaussian, pad_border_mode=pad_border_mode,
-                                      pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu, verbose=verbose,
-                                      mixed_precision=mixed_precision)
-        self.network.train(current_mode)
+            current_mode = self.network.training
+            self.network.eval()
+            ret = self.network.predict_3D(data, do_mirroring=do_mirroring, mirror_axes=mirror_axes,
+                                          use_sliding_window=use_sliding_window, step_size=step_size,
+                                          patch_size=self.patch_size, regions_class_order=self.regions_class_order,
+                                          use_gaussian=use_gaussian, pad_border_mode=pad_border_mode,
+                                          pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu, verbose=verbose,
+                                          mixed_precision=mixed_precision, window_type=window_type)
+            self.network.train(current_mode)
         return ret
 
     def validate(self, do_mirroring: bool = True, use_sliding_window: bool = True, step_size: float = 0.5,

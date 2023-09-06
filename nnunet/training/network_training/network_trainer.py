@@ -77,6 +77,11 @@ class NetworkTrainer(object):
         self.tr_gen = self.val_gen = None
         self.was_initialized = False
 
+        ################# SET THESE IN self.initialize() ###################################
+        self.trt_path = ""
+        self.trt_mode = False
+        self.trt_session = None
+
         ################# SET THESE IN INIT ################################################
         self.output_folder = None
         self.fold = None
@@ -358,44 +363,44 @@ class NetworkTrainer(object):
 
         if self.fp16:
             self._maybe_init_amp()
-            if train:
-                if 'amp_grad_scaler' in checkpoint.keys():
-                    self.amp_grad_scaler.load_state_dict(checkpoint['amp_grad_scaler'])
+            # if train:
+            #     if 'amp_grad_scaler' in checkpoint.keys():
+            #         self.amp_grad_scaler.load_state_dict(checkpoint['amp_grad_scaler'])
 
         self.network.load_state_dict(new_state_dict)
-        self.epoch = checkpoint['epoch']
-        if train:
-            optimizer_state_dict = checkpoint['optimizer_state_dict']
-            if optimizer_state_dict is not None:
-                self.optimizer.load_state_dict(optimizer_state_dict)
+        # self.epoch = checkpoint['epoch']
+        # if train:
+        #     optimizer_state_dict = checkpoint['optimizer_state_dict']
+        #     if optimizer_state_dict is not None:
+        #         self.optimizer.load_state_dict(optimizer_state_dict)
+        #
+        #     if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'load_state_dict') and checkpoint[
+        #         'lr_scheduler_state_dict'] is not None:
+        #         self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
+        #
+        #     if issubclass(self.lr_scheduler.__class__, _LRScheduler):
+        #         self.lr_scheduler.step(self.epoch)
 
-            if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'load_state_dict') and checkpoint[
-                'lr_scheduler_state_dict'] is not None:
-                self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
-
-            if issubclass(self.lr_scheduler.__class__, _LRScheduler):
-                self.lr_scheduler.step(self.epoch)
-
-        self.all_tr_losses, self.all_val_losses, self.all_val_losses_tr_mode, self.all_val_eval_metrics = checkpoint[
-            'plot_stuff']
+        # self.all_tr_losses, self.all_val_losses, self.all_val_losses_tr_mode, self.all_val_eval_metrics = checkpoint[
+        #     'plot_stuff']
 
         # load best loss (if present)
-        if 'best_stuff' in checkpoint.keys():
-            self.best_epoch_based_on_MA_tr_loss, self.best_MA_tr_loss_for_patience, self.best_val_eval_criterion_MA = checkpoint[
-                'best_stuff']
+        # if 'best_stuff' in checkpoint.keys():
+        #     self.best_epoch_based_on_MA_tr_loss, self.best_MA_tr_loss_for_patience, self.best_val_eval_criterion_MA = checkpoint[
+        #         'best_stuff']
 
         # after the training is done, the epoch is incremented one more time in my old code. This results in
         # self.epoch = 1001 for old trained models when the epoch is actually 1000. This causes issues because
         # len(self.all_tr_losses) = 1000 and the plot function will fail. We can easily detect and correct that here
-        if self.epoch != len(self.all_tr_losses):
-            self.print_to_log_file("WARNING in loading checkpoint: self.epoch != len(self.all_tr_losses). This is "
-                                   "due to an old bug and should only appear when you are loading old models. New "
-                                   "models should have this fixed! self.epoch is now set to len(self.all_tr_losses)")
-            self.epoch = len(self.all_tr_losses)
-            self.all_tr_losses = self.all_tr_losses[:self.epoch]
-            self.all_val_losses = self.all_val_losses[:self.epoch]
-            self.all_val_losses_tr_mode = self.all_val_losses_tr_mode[:self.epoch]
-            self.all_val_eval_metrics = self.all_val_eval_metrics[:self.epoch]
+        # if self.epoch != len(self.all_tr_losses):
+        #     self.print_to_log_file("WARNING in loading checkpoint: self.epoch != len(self.all_tr_losses). This is "
+        #                            "due to an old bug and should only appear when you are loading old models. New "
+        #                            "models should have this fixed! self.epoch is now set to len(self.all_tr_losses)")
+        #     self.epoch = len(self.all_tr_losses)
+        #     self.all_tr_losses = self.all_tr_losses[:self.epoch]
+        #     self.all_val_losses = self.all_val_losses[:self.epoch]
+        #     self.all_val_losses_tr_mode = self.all_val_losses_tr_mode[:self.epoch]
+        #     self.all_val_eval_metrics = self.all_val_eval_metrics[:self.epoch]
 
         self._maybe_init_amp()
 
