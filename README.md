@@ -7,6 +7,7 @@ You can reproduce our method as follows step by step:
 
 ## Environments and Requirements:
 ![Environments](assets/Environments.png)
+
 Install nnU-Net version 1.7.0 [1] as below. You should meet the requirements of nnUNet, our method does not need any additional requirements. For more details, please refer to https://github.com/MIC-DKFZ/nnUNet
 ```
 git clone https://github.com/MIC-DKFZ/nnUNet.git
@@ -81,6 +82,7 @@ nnUNet_predict -i INPUT_FOLDER -o OUTPUT_FOLDER -t 36 -tr nnUNetTrainerV2_FLARE_
 
 ## Results
 Our method achieves the following performance on [FLARE2023](https://codalab.lisn.upsaclay.fr/competitions/12239#learn_the_details-overview).
+
 ![QuantitativeEvaluationResults](/assets/QuantitativeEvaluationResults.png)
 
 ## Contributing
