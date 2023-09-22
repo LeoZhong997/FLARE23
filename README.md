@@ -6,12 +6,24 @@ this repository provides the solution of team voxelintelligence for [MICCAI FLAR
 You can reproduce our method as follows step by step:
 
 ## Environments and Requirements:
+![Environments](assets/Environments.png)
 Install nnU-Net version 1.7.0 [1] as below. You should meet the requirements of nnUNet, our method does not need any additional requirements. For more details, please refer to https://github.com/MIC-DKFZ/nnUNet
 ```
 git clone https://github.com/MIC-DKFZ/nnUNet.git
 cd nnUNet
 pip install -e .
 ```
+## Dataset
+Get public dataset from [FLARE2023](https://codalab.lisn.upsaclay.fr/competitions/12239#learn_the_details-overview).
+
+## Preprocessing
+1. Data cleaning or statistical analysis: We perform label analysis to check label completeness. Out of 2200 labeled data, 222 cases include complete organ labels without tumors, and 1497 cases have tumor labels. 
+These two subsets are utilized for training our single-task models.
+2. Reorientation: As we want the network to predict images regardless of orientation, we reorient the images to the standard RAS orientation during the training phase. 
+Later, we will apply mirroring operations in the later stages of data augmentation to enhance the network's orientation robustness.
+3. Resampling method for anisotropic data: In order to leverage the physical information within the CT data, all images are resampled to the same resolution of 4.0mm × 1.2mm × 1.2mm
+4. Intensity normalization method: Initially, we compute the 0.5 and 99.5 percentiles, as well as the mean and standard deviation of the data intensity. Subsequently, the data is clipped to the 0.5 and 99.5 percentiles, and z-score normalization is applied using the global mean and standard deviation.
+
 ## 1. Training base nnUNet model for Pseudo Labeling
 ### 1.1. Copy the following files in this repo to your nnUNet environment.
 ```
@@ -66,6 +78,16 @@ nnUNet_predict -i INPUT_FOLDER -o OUTPUT_FOLDER -t 36 -tr nnUNetTrainerV2_FLARE_
  -m 3d_fullres -p nnUNetPlansFLARE23TumorMedium -f all --all_in_gpu True \ 
  --mode fastest --disable_tta -w full --disable_postprocessing
 ```
+
+## Results
+Our method achieves the following performance on [FLARE2023](https://codalab.lisn.upsaclay.fr/competitions/12239#learn_the_details-overview).
+![QuantitativeEvaluationResults](/assets/QuantitativeEvaluationResults.png)
+
+## Contributing
+If you have suggestions for improving this project, open an issue on this project.
+
+## Acknowledgement
+The authors of this paper declare that the segmentation method they implemented for participation in the FLARE 2023 challenge has not used any pre-trained models nor additional datasets other than those provided by the organizers. The proposed solution is fully automatic without any manual intervention. We thank all the data owners for making the CT scans publicly available and CodaLab for hosting the challenge platform. 
 
 # Citations
 If you find this repository useful, please consider citing our paper:
